@@ -210,7 +210,7 @@ if files:
         else: st.error(e)
 
 if not results:
-    st.info("👈 กรุณาเพิ่มข้อมูลจากแถบเมนูด้านซ้าย")
+    st.info("กรุณาเพิ่มข้อมูลจากแถบเมนูด้านซ้าย")
 else:
     # --- MODE A: Single File ---
     if len(results) == 1:
@@ -218,7 +218,7 @@ else:
         st.subheader(f"🦠 {d['name']} (ID: {d['id']})")
         
         # เพิ่มแท็บ Lite ML ในโหมดไฟล์เดียวด้วย
-        tab1, tab2, tab3 = st.tabs(["📊 ภาพรวม (Overview)", "🔬 รายละเอียด (Breakdown)", "🤖 Lite ML Analysis"])
+        tab1, tab2, tab3 = st.tabs(["ภาพรวม (Overview)", "รายละเอียด (Breakdown)", "Lite ML Analysis"])
         
         with tab1:
             c1, c2, c3, c4 = st.columns(4)
@@ -265,10 +265,10 @@ else:
                     st.plotly_chart(px.scatter(df_chrom, x="Length", y="Non-coding%", size="Genes", color="GC%"), use_container_width=True)
         
         with tab3:
-            st.markdown("### 🤖 Lite ML: K-Means Clustering (Internal Analysis)")
+            st.markdown("### Lite ML: K-Means Clustering (Internal Analysis)")
             st.write("อัลกอริทึมจะจัดกลุ่มลำดับเบส ncDNA ภายในจีโนมนี้ออกเป็นกลุ่มย่อยตามคุณสมบัติทางเคมี (Dinucleotide Pattern)")
             
-            if st.button("🚀 Run Internal Clustering"):
+            if st.button("Run Internal Clustering"):
                 with st.spinner("Training..."):
                     vecs = []
                     # สุ่ม 2000 sequence เพื่อความเร็ว
@@ -311,7 +311,7 @@ else:
 
     # --- MODE B: Comparison ---
     else:
-        st.subheader(f"⚔️ เปรียบเทียบ {len(results)} ตัวอย่าง")
+        st.subheader(f" เปรียบเทียบ {len(results)} ตัวอย่าง")
         
         df = pd.DataFrame([{
             "Name": r['name'], 
@@ -341,10 +341,10 @@ else:
             st.plotly_chart(px.bar(df, x="Name", y="GC%", color="GC%"), use_container_width=True)
             
         with t4:
-            st.markdown("### 🤖 AI Clustering (Cross-species Comparison)")
+            st.markdown("### AI Clustering (Cross-species Comparison)")
             st.write("เปรียบเทียบว่า ncDNA ของสิ่งมีชีวิตแต่ละชนิด มีลักษณะทางเคมีคล้ายคลึงกันในกลุ่มใดบ้าง")
             
-            if st.button("🚀 Run Clustering"):
+            if st.button("Run Clustering"):
                 with st.spinner("Training..."):
                     vecs, labels = [], []
                     for r in results:
