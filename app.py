@@ -10,12 +10,12 @@ from sklearn.cluster import KMeans
 from itertools import product
 
 # ============================================
-# 1. ตั้งค่าหน้าเว็บและธีม (UI Setup)
+# 1. UI Setup
 # ============================================
 st.set_page_config(page_title="GBFF Genome Analyzer", layout="wide", page_icon="🧬")
 plt.style.use('dark_background') # ธีมกราฟสีมืด
 
-# CSS ปรับแต่งความสวยงาม
+# CSS
 st.markdown("""
 <style>
     .stApp { background-color: #262730; color: #FFFFFF; }
@@ -26,12 +26,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# เตรียมตัวแปร Session State สำหรับเก็บข้อมูล
+# Session State 
 if 'fetched_data' not in st.session_state:
     st.session_state['fetched_data'] = []
 
 # ============================================
-# 2. ฟังก์ชันคำนวณหลัก (Core Logic)
+# 2. Main Func
 # ============================================
 @st.cache_data
 def calculate_gc(sequence):
@@ -59,7 +59,7 @@ def get_kmer_features(seq, k=2):
         kmer = seq[i:i+k]
         if kmer in counts: counts[kmer] += 1
             
-    return [counts[k]/total for k in kmers] # คืนค่าเป็นสัดส่วน (0.0 - 1.0)
+    return [counts[k]/total for k in kmers] 
 
 def process_genbank(file_content, filename):
     """อ่านไฟล์ GenBank และถอดรหัสข้อมูลทั้งหมด (รองรับหลายโครโมโซม)"""
@@ -81,14 +81,13 @@ def process_genbank(file_content, filename):
 
         for record in records:
             seq = str(record.seq).upper()
-            if not seq or set(seq) == {'?'}: continue # ข้ามไฟล์ที่ไม่มีลำดับเบส
-
+            if not seq or set(seq) == {'?'}: continue 
             slen = len(seq)
             total_len += slen
             combined_seq += seq
             total_gc_bases += (seq.count("G") + seq.count("C"))
 
-            # ดึงข้อมูลยีน (CDS)
+            # ดึงข้อมูลยีน 
             cds_feats = sorted(
                 [{'s': int(f.location.start), 'e': int(f.location.end), 'str': f.location.strand} 
                  for f in record.features if f.type == "CDS"], 
@@ -163,7 +162,7 @@ def fetch_ncbi(acc_id, email):
         return handle.read()
 
 # ============================================
-# 3. ส่วนแสดงผล (Frontend)
+# 3. Frontend
 # ============================================
 with st.sidebar:
     st.title("GBFF Analyzer")
