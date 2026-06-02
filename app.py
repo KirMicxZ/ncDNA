@@ -41,14 +41,12 @@ def fetch_ncbi(acc_id, email):
     acc_id = acc_id.strip().upper()
     
     if acc_id.startswith("GCF_") or acc_id.startswith("GCA_"):
-        # 1. ค้นหา Assembly ID
         with Entrez.esearch(db="assembly", term=acc_id) as search_handle:
             search_rec = Entrez.read(search_handle)
             if not search_rec["IdList"]:
                 raise Exception(f"ไม่พบข้อมูลสำหรับ Assembly: {acc_id}")
             assembly_id = search_rec["IdList"][0]
         
-        # 2. แกะกล่อง หาลิงก์โครโมโซมย่อยๆ ไปยังฐานข้อมูล Nucleotide
         with Entrez.elink(dbfrom="assembly", db="nucleotide", id=assembly_id) as link_handle:
             link_rec = Entrez.read(link_handle)
             if not link_rec[0].get("LinkSetDb"):
@@ -59,7 +57,6 @@ def fetch_ncbi(acc_id, email):
             if len(nucl_ids) > 50:
                 raise Exception(f"จีโนมนี้ประกอบด้วยชิ้นส่วนถึง {len(nucl_ids)} ชิ้น แนะนำให้ดาวน์โหลดไฟล์ .gbff จากเว็บ NCBI มาอัปโหลดเองครับ")
             
-            # 3. ดาวน์โหลดโครโมโซมย่อยทั้งหมดรวดเดียว
             id_string = ",".join(nucl_ids)
             with Entrez.efetch(db="nucleotide", id=id_string, rettype="gbwithparts", retmode="text") as fetch_handle:
                 return fetch_handle.read()
@@ -86,7 +83,7 @@ def process_genbank(file_content, filename):
     except Exception as e:
         return None, f"Error reading {filename}: {e}"
 
-    # --- 🛠️ เพิ่มระบบกรองโครโมโซมซ้ำ (Deduplication) เพื่อแก้ปัญหาแท่งกราฟซ้อนกัน ---
+    # ระบบกรองโครโมโซมซ้ำ (Deduplication)
     seen_short_names = set()
     filtered_records = []
     for record in records:
@@ -94,11 +91,10 @@ def process_genbank(file_content, filename):
         short_name = match.group(1).upper() if match else record.id
         
         if short_name in seen_short_names:
-            continue  # ถ้าเคยเจอโครโมโซมชื่อนี้แล้ว (เช่น เจอเวอร์ชัน RefSeq ไปแล้ว) ให้ข้ามเวอร์ชัน GenBank ทิ้งไปเลย
+            continue 
         seen_short_names.add(short_name)
         filtered_records.append(record)
     records = filtered_records
-    # -----------------------------------------------------------------------
 
     chromosomes_data = {}
     total_len = 0
@@ -111,10 +107,16 @@ def process_genbank(file_content, filename):
         total_len += slen
         total_gc += (seq.count("G") + seq.count("C"))
         
+        # Extract CDS & Amino Acids
         cds_regions = []
+        protein_seqs = []  # เก็บสายกรดอะมิโนของโครโมโซมนี้
         for f in record.features:
             if f.type == "CDS":
                 cds_regions.append((int(f.location.start), int(f.location.end)))
+                # ดึงรหัสกรดอะมิโนที่แปลไว้แล้วยัดใส่ลิสต์
+                if 'translation' in f.qualifiers:
+                    protein_seqs.append(f.qualifiers['translation'][0].upper())
+                    
         cds_regions.sort()
 
         coding_len = sum(e - s for s, e in cds_regions)
@@ -123,6 +125,7 @@ def process_genbank(file_content, filename):
         coding_pct = (coding_len / slen) * 100 if slen > 0 else 0
         nc_pct = 100 - coding_pct
         
+        # Extract Intergenic Regions
         intergenic_seqs = []
         prev = 0
         for s, e in cds_regions:
@@ -131,6 +134,11 @@ def process_genbank(file_content, filename):
             prev = e
         if prev < slen:
             intergenic_seqs.append(seq[prev:slen])
+
+        # คำนวณความถี่ของกรดอะมิโนแต่ละชนิดบนโครโมโซมนี้ (มาตรฐาน 20 ชนิด)
+        all_proteins_combined = "".join(protein_seqs)
+        aa_list = list("ACDEFGHIKLMNPQRSTVWY")
+        aa_dist = {aa: all_proteins_combined.count(aa) for aa in aa_list} if all_proteins_combined else {}
 
         chromosomes_data[record.id] = {
             "id": record.id,
@@ -141,7 +149,9 @@ def process_genbank(file_content, filename):
             "coding_pct": coding_pct,
             "nc_pct": nc_pct,
             "intergenic_seqs": intergenic_seqs,
-            "gc_total": calculate_gc(seq)
+            "gc_total": calculate_gc(seq),
+            "aa_dist": aa_dist, # ส่งข้อมูลกรดอะมิโนออกไป
+            "total_proteins": len(protein_seqs)
         }
 
     overall_coding_pct = (total_coding_len / total_len) * 100 if total_len > 0 else 0
@@ -392,7 +402,25 @@ else:
         if vals:
             st.area_chart(pd.DataFrame({'GC%': vals}, index=pos), color="#6366f1")
 
-        # 4. Advanced Analysis Section
+        # --- 🧬 ส่วนเสริมใหม่: สัดส่วนกรดอะมิโนบนโครโมโซม ---
+        st.divider()
+        st.markdown(f"**4. สัดส่วนการกระจายตัวของกรดอะมิโน (Amino Acid Composition) - พบโปรตีนทั้งหมด {c_data['total_proteins']:,} ชนิด**")
+        if c_data.get('aa_dist'):
+            # แปลง Dict เป็น DataFrame เพื่อพล็อตกราฟ
+            df_aa = pd.DataFrame(list(c_data['aa_dist'].items()), columns=['Amino Acid', 'Count'])
+            df_aa = df_aa.sort_values(by="Count", ascending=False) # เรียงลำดับจากมากไปน้อย
+            
+            fig_aa = px.bar(
+                df_aa, x='Amino Acid', y='Count', color='Count',
+                template='plotly_dark', color_continuous_scale="Blugrn",
+                labels={"Count": "จำนวนพบคอร์โดน (ครั้ง)"}
+            )
+            fig_aa.update_layout(margin=dict(l=0, r=0, t=20, b=0), height=350)
+            st.plotly_chart(fig_aa, use_container_width=True, config={'displayModeBar': False})
+        else:
+            st.info("⚠️ ไม่พบลำดับข้อมูลกรดอะมิโน (Translation Feature) ในไฟล์นี้")
+
+        # 5. Advanced Analysis Section
         st.markdown("---")
         st.subheader("Advanced Analysis: Repeats & Data")
         
