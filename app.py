@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import io
 import plotly.express as px
-import plotly.graph_objects as go  # เพิ่มการ import graph_objects
+import plotly.graph_objects as go  
 import re
 
 # ============================================
@@ -240,33 +240,46 @@ else:
         st.markdown(f"### ผลการวิเคราะห์: {data['name']}")
         st.caption(f"File: {data['filename']} | จำนวนโครโมโซมที่พบ: {data['total_chromosomes']} โครโมโซม")
         
-        # --- สร้างกล่องเลือกโครโมโซม (สไตล์ NCBI Visual Map) ---
+        # --- ระบบสลับโครโมโซมด้วยการจิ้มแท่งกราฟโดยตรง ---
         chrom_ids = list(data['chromosomes'].keys())
+        
+        # ล็อกตัวแปรลงใน Session State เพื่อจำว่าตอนนี้เลือกแท่งไหนอยู่
+        if 'selected_chrom_id' not in st.session_state or st.session_state.selected_chrom_id not in chrom_ids:
+            st.session_state.selected_chrom_id = chrom_ids[0]
+            
         if len(chrom_ids) > 1:
             st.markdown("### 🧬 แผนผังโครโมโซม (Chromosome Map)")
-            st.write("เปรียบเทียบขนาดและเลือกโครโมโซมที่ต้องการวิเคราะห์จากแผนผังด้านล่าง")
+            st.write("👆 **คลิกจิ้มเลือกที่แท่งโครโมโซม** ในแผนผังด้านล่างนี้ เพื่อสลับดูสถิติและข้อมูลเชิงลึกได้ทันที")
 
-            # 1. จัดเตรียมข้อมูลสำหรับวาดรูป (พยายามสกัดชื่อย่อ เช่น I, II, III ออกมา)
+            # 1. จัดเตรียมข้อมูลสำหรับวาดรูป
             c_names = []
             c_lengths = []
             for cid in chrom_ids:
                 desc = data['chromosomes'][cid]['desc']
-                # สกัดชื่อโครโมโซมสั้นๆ ด้วย Regex (หาคำที่ตามหลังคำว่า chromosome)
                 match = re.search(r'chromosome\s+([A-Za-z0-9]+)', desc, re.IGNORECASE)
                 short_name = match.group(1) if match else cid
                 c_names.append(short_name)
                 c_lengths.append(data['chromosomes'][cid]['len'])
 
-            # 2. วาดกราฟโครโมโซมเลียนแบบ NCBI ด้วย plotly.graph_objects
+            name_to_id = dict(zip(c_names, chrom_ids))
+
+            # 2. สร้างระบบไฮไลท์สี: แท่งที่ถูกเลือกจะเป็นสีม่วงเด่น แท่งอื่นจะใสจางๆ แบบ NCBI
+            colors = []
+            line_colors = []
+            for cid in chrom_ids:
+                if cid == st.session_state.selected_chrom_id:
+                    colors.append('rgba(99, 102, 241, 0.7)') # ไฮไลท์น้ำเงิน/ม่วงแบบทึบแสง
+                    line_colors.append('#818cf8')
+                else:
+                    colors.append('rgba(255, 255, 255, 0.08)') # สีจางโปร่งใส
+                    line_colors.append('#9CA3AF')
+
             fig = go.Figure(data=[
                 go.Bar(
                     x=c_names,
                     y=c_lengths,
-                    marker=dict(
-                        color='rgba(255, 255, 255, 0.05)', # สีใส (ให้ดูเหมือนภาพของ NCBI)
-                        line=dict(color='#9CA3AF', width=2), # ขอบสีเทาอ่อน
-                    ),
-                    width=0.4, # ความกว้างของแท่งโครโมโซม
+                    marker=dict(color=colors, line=dict(color=line_colors, width=2)),
+                    width=0.4,
                     hoverinfo='x+y',
                     hovertemplate='Chromosome %{x}<br>Length: %{y:,} bp<extra></extra>'
                 )
@@ -275,64 +288,34 @@ else:
             fig.update_layout(
                 plot_bgcolor='rgba(0,0,0,0)',
                 paper_bgcolor='rgba(0,0,0,0)',
-                # ย้าย Label แกน X ไปไว้ด้านบน
-                xaxis=dict(showgrid=False, zeroline=False, side='top', tickfont=dict(size=14, color="#E5E7EB")),
-                # ซ่อนแกน Y และ "กลับหัวแท่งกราฟ (reversed)" ให้ห้อยลงมาเหมือนรูป
-                yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, autorange="reversed"),
-                height=220, # ความสูงกราฟ
+                xaxis=dict(showgrid=False, zeroline=False, side='top', tickfont=dict(size=14, color="#E5E7EB"), fixedrange=True),
+                yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, autorange="reversed", fixedrange=True),
+                height=220,
                 margin=dict(l=0, r=0, t=40, b=0),
-                dragmode=False # ปิดการซูมเพื่อความสวยงาม
+                dragmode=False
             )
             
-            # แสดงกราฟ (ใช้เป็น Visual Map ให้ผู้ใช้ดู)
-            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-
-            # 3. สร้างปุ่มเลือกด้านล่างกราฟ
-            # ใช้ CSS แต่งปุ่ม Radio แนวนอนให้กลายเป็นปุ่มกดสไตล์ Pill
-            st.markdown("""
-            <style>
-                /* ปรับแต่ง Radio ให้อยู่ตรงกลางและเป็นแนวนอน */
-                div.row-widget.stRadio > div {
-                    display: flex;
-                    flex-direction: row;
-                    flex-wrap: wrap;
-                    justify-content: center;
-                    gap: 10px;
-                }
-                /* แต่งกล่องพื้นหลังของแต่ละตัวเลือก */
-                div.row-widget.stRadio > div > label {
-                    background-color: #1e1e24;
-                    border: 1px solid #6366f1;
-                    padding: 8px 24px;
-                    border-radius: 20px;
-                    cursor: pointer;
-                    transition: all 0.3s ease;
-                }
-                /* เอฟเฟกต์ตอนเอาเมาส์ชี้ */
-                div.row-widget.stRadio > div > label:hover {
-                    background-color: #4f46e5;
-                    border-color: #818cf8;
-                }
-                /* ซ่อนวงกลม Radio เดิม */
-                div.row-widget.stRadio > div > label > div:first-child {
-                    display: none !important;
-                }
-            </style>
-            """, unsafe_allow_html=True)
-
-            # นำชื่อสั้นมาจับคู่กับ ID จริง เพื่อให้ตอนดึงข้อมูลด้านล่างไปใช้ได้ถูกต้อง
-            name_to_id = dict(zip(c_names, chrom_ids))
-
-            selected_short_name = st.radio(
-                "เลือกโครโมโซม:",
-                options=c_names,
-                horizontal=True,
-                label_visibility="collapsed" # ซ่อนข้อความหัวข้อ
+            # เปิดโหมดดักฟังคำสั่งคลิกเลือกวัตถุบนตัวกราฟ
+            chart_event = st.plotly_chart(
+                fig, 
+                use_container_width=True, 
+                config={'displayModeBar': False},
+                on_select="rerun",  # สั่งหน้าเว็กรันใหม่ทันทีเมื่อจิ้มกราฟ
+                selection_mode="points"
             )
             
-            # ดึง ID จริงกลับมาใช้งาน
-            selected_chrom_id = name_to_id[selected_short_name]
+            # ตรวจสอบตัวแปรเหตุการณ์ว่ามีคนเอาเมาส์ไปจิ้มแท่งกราฟไหม
+            if chart_event and "selection" in chart_event and "points" in chart_event["selection"]:
+                points = chart_event["selection"]["points"]
+                if len(points) > 0:
+                    clicked_x = points[0]["x"]
+                    clicked_id = name_to_id.get(clicked_x)
+                    # ถ้าคลิกแท่งใหม่ที่ไม่ซ้ำกับของเดิม ให้บันทึกค่าแล้วเปลี่ยนโครโมโซมทันที
+                    if clicked_id and clicked_id != st.session_state.selected_chrom_id:
+                        st.session_state.selected_chrom_id = clicked_id
+                        st.rerun()
 
+            selected_chrom_id = st.session_state.selected_chrom_id
             st.markdown("<br>", unsafe_allow_html=True)
         else:
             selected_chrom_id = chrom_ids[0]
@@ -341,6 +324,7 @@ else:
         c_data = data['chromosomes'][selected_chrom_id]
         
         # 1. Key Metrics 
+        st.markdown(f"#### 📊 ข้อมูลเชิงลึกของ: {selected_chrom_id} ({c_data['desc']})")
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Chromosome Length", f"{c_data['len']:,} bp")
         m2.metric("GC Content", f"{c_data['gc_total']:.2f}%")
