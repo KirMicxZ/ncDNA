@@ -24,7 +24,7 @@ st.markdown("""
     [data-testid="stMetricValue"] { color: #4ADE80 !important; } 
     [data-testid="stMetricLabel"] { color: #D1D5DB !important; }
     [data-testid="stDataFrame"] { background-color: #262730; }
-    .stButton button { width: 100%; }
+    .stButton button { width: 100%; border-radius: 8px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -40,7 +40,6 @@ def fetch_ncbi(acc_id, email):
     Entrez.email = email
     acc_id = acc_id.strip().upper()
     
-    # ตรวจสอบว่าเป็นรหัสประเภท Assembly (แบบกล่องรวม) หรือไม่
     if acc_id.startswith("GCF_") or acc_id.startswith("GCA_"):
         # 1. ค้นหา Assembly ID
         with Entrez.esearch(db="assembly", term=acc_id) as search_handle:
@@ -55,10 +54,8 @@ def fetch_ncbi(acc_id, email):
             if not link_rec[0].get("LinkSetDb"):
                 raise Exception(f"ไม่พบข้อมูลลำดับเบสที่เชื่อมโยงกับ Assembly: {acc_id}")
             
-            # ดึงรายการ ID โครโมโซมทั้งหมดออกมา
             nucl_ids = [link["Id"] for link in link_rec[0]["LinkSetDb"][0]["Link"]]
             
-            # ระบบป้องกันภัย: ป้องกันแอปค้างกรณีชิ้นส่วนเยอะเกินไป
             if len(nucl_ids) > 50:
                 raise Exception(f"จีโนมนี้ประกอบด้วยชิ้นส่วนถึง {len(nucl_ids)} ชิ้น แนะนำให้ดาวน์โหลดไฟล์ .gbff จากเว็บ NCBI มาอัปโหลดเองครับ")
             
@@ -66,9 +63,7 @@ def fetch_ncbi(acc_id, email):
             id_string = ",".join(nucl_ids)
             with Entrez.efetch(db="nucleotide", id=id_string, rettype="gbwithparts", retmode="text") as fetch_handle:
                 return fetch_handle.read()
-                
     else:
-        # กรณีเป็นรหัส Nucleotide เส้นเดี่ยว (เช่น NC_000913) ให้ทำงานตามปกติ
         with Entrez.efetch(db="nucleotide", id=acc_id, rettype="gbwithparts", retmode="text") as handle:
             return handle.read()
 
@@ -91,6 +86,20 @@ def process_genbank(file_content, filename):
     except Exception as e:
         return None, f"Error reading {filename}: {e}"
 
+    # --- 🛠️ เพิ่มระบบกรองโครโมโซมซ้ำ (Deduplication) เพื่อแก้ปัญหาแท่งกราฟซ้อนกัน ---
+    seen_short_names = set()
+    filtered_records = []
+    for record in records:
+        match = re.search(r'chromosome\s+([A-Za-z0-9]+)', record.description, re.IGNORECASE)
+        short_name = match.group(1).upper() if match else record.id
+        
+        if short_name in seen_short_names:
+            continue  # ถ้าเคยเจอโครโมโซมชื่อนี้แล้ว (เช่น เจอเวอร์ชัน RefSeq ไปแล้ว) ให้ข้ามเวอร์ชัน GenBank ทิ้งไปเลย
+        seen_short_names.add(short_name)
+        filtered_records.append(record)
+    records = filtered_records
+    # -----------------------------------------------------------------------
+
     chromosomes_data = {}
     total_len = 0
     total_coding_len = 0
@@ -102,21 +111,18 @@ def process_genbank(file_content, filename):
         total_len += slen
         total_gc += (seq.count("G") + seq.count("C"))
         
-        # Extract CDS
         cds_regions = []
         for f in record.features:
             if f.type == "CDS":
                 cds_regions.append((int(f.location.start), int(f.location.end)))
         cds_regions.sort()
 
-        # Calculate metrics for this specific chromosome
         coding_len = sum(e - s for s, e in cds_regions)
         total_coding_len += coding_len
         
         coding_pct = (coding_len / slen) * 100 if slen > 0 else 0
         nc_pct = 100 - coding_pct
         
-        # Extract Intergenic Regions
         intergenic_seqs = []
         prev = 0
         for s, e in cds_regions:
@@ -257,7 +263,6 @@ else:
         
         chrom_ids = list(data['chromosomes'].keys())
         
-        # บันทึกค่าโครโมโซมที่ถูกเลือกเข้า Session State
         if 'selected_chrom_id' not in st.session_state or st.session_state.selected_chrom_id not in chrom_ids:
             st.session_state.selected_chrom_id = chrom_ids[0]
             
@@ -270,13 +275,12 @@ else:
             for cid in chrom_ids:
                 desc = data['chromosomes'][cid]['desc']
                 match = re.search(r'chromosome\s+([A-Za-z0-9]+)', desc, re.IGNORECASE)
-                short_name = match.group(1) if match else cid
+                short_name = match.group(1).upper() if match else cid
                 c_names.append(short_name)
                 c_lengths.append(data['chromosomes'][cid]['len'])
 
             name_to_id = dict(zip(c_names, chrom_ids))
 
-            # ทำไฮไลท์สีตามการคลิกเลือก
             colors = []
             line_colors = []
             for cid in chrom_ids:
@@ -308,7 +312,6 @@ else:
                 dragmode=False
             )
             
-            # เปิดระบบรับ Event การจิ้มบนแท่งกราฟ
             chart_event = st.plotly_chart(
                 fig, use_container_width=True, config={'displayModeBar': False},
                 on_select="rerun", selection_mode="points"
