@@ -36,10 +36,41 @@ if 'ncbi_cache' not in st.session_state:
 # 2. Helper Functions (Logic)
 # ============================================
 def fetch_ncbi(acc_id, email):
-    """ดึงข้อมูล GenBank จาก NCBI ผ่าน API"""
+    """ดึงข้อมูล GenBank จาก NCBI พร้อมรองรับทั้งรหัส Nucleotide (NC_) และ Assembly (GCF_/GCA_)"""
     Entrez.email = email
-    with Entrez.efetch(db="nucleotide", id=acc_id, rettype="gbwithparts", retmode="text") as handle:
-        return handle.read()
+    acc_id = acc_id.strip().upper()
+    
+    # ตรวจสอบว่าเป็นรหัสประเภท Assembly (แบบกล่องรวม) หรือไม่
+    if acc_id.startswith("GCF_") or acc_id.startswith("GCA_"):
+        # 1. ค้นหา Assembly ID
+        with Entrez.esearch(db="assembly", term=acc_id) as search_handle:
+            search_rec = Entrez.read(search_handle)
+            if not search_rec["IdList"]:
+                raise Exception(f"ไม่พบข้อมูลสำหรับ Assembly: {acc_id}")
+            assembly_id = search_rec["IdList"][0]
+        
+        # 2. แกะกล่อง หาลิงก์โครโมโซมย่อยๆ ไปยังฐานข้อมูล Nucleotide
+        with Entrez.elink(dbfrom="assembly", db="nucleotide", id=assembly_id) as link_handle:
+            link_rec = Entrez.read(link_handle)
+            if not link_rec[0].get("LinkSetDb"):
+                raise Exception(f"ไม่พบข้อมูลลำดับเบสที่เชื่อมโยงกับ Assembly: {acc_id}")
+            
+            # ดึงรายการ ID โครโมโซมทั้งหมดออกมา
+            nucl_ids = [link["Id"] for link in link_rec[0]["LinkSetDb"][0]["Link"]]
+            
+            # ระบบป้องกันภัย: ป้องกันแอปค้างกรณีชิ้นส่วนเยอะเกินไป
+            if len(nucl_ids) > 50:
+                raise Exception(f"จีโนมนี้ประกอบด้วยชิ้นส่วนถึง {len(nucl_ids)} ชิ้น แนะนำให้ดาวน์โหลดไฟล์ .gbff จากเว็บ NCBI มาอัปโหลดเองครับ")
+            
+            # 3. ดาวน์โหลดโครโมโซมย่อยทั้งหมดรวดเดียว
+            id_string = ",".join(nucl_ids)
+            with Entrez.efetch(db="nucleotide", id=id_string, rettype="gbwithparts", retmode="text") as fetch_handle:
+                return fetch_handle.read()
+                
+    else:
+        # กรณีเป็นรหัส Nucleotide เส้นเดี่ยว (เช่น NC_000913) ให้ทำงานตามปกติ
+        with Entrez.efetch(db="nucleotide", id=acc_id, rettype="gbwithparts", retmode="text") as handle:
+            return handle.read()
 
 @st.cache_data
 def calculate_gc(sequence):
@@ -55,7 +86,6 @@ def find_simple_repeats(seq, motif="AT", threshold=5):
 def process_genbank(file_content, filename):
     """Reads a GenBank file and extracts key metrics for ALL chromosomes."""
     try:
-        # ใช้ list() เพื่ออ่านทุกโครโมโซมในไฟล์
         records = list(SeqIO.parse(io.StringIO(file_content), "genbank"))
         if not records: return None, "ไม่พบข้อมูลในไฟล์"
     except Exception as e:
@@ -66,7 +96,6 @@ def process_genbank(file_content, filename):
     total_coding_len = 0
     total_gc = 0
     
-    # วนลูปประมวลผลทีละโครโมโซม
     for record in records:
         seq = str(record.seq).upper()
         slen = len(seq)
@@ -97,7 +126,6 @@ def process_genbank(file_content, filename):
         if prev < slen:
             intergenic_seqs.append(seq[prev:slen])
 
-        # เก็บแยกตาม ID โครโมโซม
         chromosomes_data[record.id] = {
             "id": record.id,
             "desc": record.description,
@@ -110,7 +138,6 @@ def process_genbank(file_content, filename):
             "gc_total": calculate_gc(seq)
         }
 
-    # สรุปภาพรวมสำหรับโหมดเปรียบเทียบหลายไฟล์
     overall_coding_pct = (total_coding_len / total_len) * 100 if total_len > 0 else 0
     
     return {
@@ -131,11 +158,10 @@ with st.sidebar:
     st.title("Genome Analyzer")
     st.markdown("เครื่องมือวิเคราะห์โครงสร้างจีโนม")
     
-    # --- เพิ่มระบบดาวน์โหลดจาก NCBI ---
     st.markdown("---")
     st.subheader("🌐 ดึงข้อมูลจาก NCBI")
     ncbi_email = st.text_input("Email (จำเป็น)", placeholder="email@example.com")
-    ncbi_id = st.text_input("RefSeq ID", placeholder="เช่น NC_000913")
+    ncbi_id = st.text_input("RefSeq ID", placeholder="เช่น NC_000913 หรือ GCF_000146045.2")
     
     if st.button("📥 ดาวน์โหลดจาก NCBI"):
         if not ncbi_email or not ncbi_id:
@@ -160,7 +186,6 @@ with st.sidebar:
             st.session_state['ncbi_cache'] = []
             st.rerun()
             
-    # --- ระบบอัปโหลดไฟล์เดิม ---
     st.markdown("---")
     st.subheader("📂 อัปโหลดไฟล์")
     uploaded_files = st.file_uploader(
@@ -182,10 +207,8 @@ with st.sidebar:
 # ============================================
 # 4. Main Analysis Area
 # ============================================
-
 st.markdown('<h1 class="main-header">Genome Analysis Dashboard</h1>', unsafe_allow_html=True)
 
-# เช็คว่ามีไฟล์ที่อัปโหลด หรือ มีไฟล์จาก NCBI อย่างใดอย่างหนึ่งหรือไม่
 has_files = bool(uploaded_files)
 has_ncbi = bool(st.session_state['ncbi_cache'])
 
@@ -204,33 +227,25 @@ if not has_files and not has_ncbi:
         st.write("ดาวน์โหลดลำดับเบส Junk DNA ไปศึกษาต่อ")
 
 else:
-    # --- PROCESSING FILES ---
     results = []
     errors = []
     
     with st.spinner('กำลังประมวลผล DNA...'):
-        # 1. ประมวลผลจากไฟล์ที่อัปโหลดเข้ามา
         if has_files:
             for uploaded_file in uploaded_files:
                 content = uploaded_file.getvalue().decode("utf-8")
                 data, err = process_genbank(content, uploaded_file.name)
-                if data:
-                    results.append(data)
-                else:
-                    errors.append(err)
+                if data: results.append(data)
+                else: errors.append(err)
         
-        # 2. ประมวลผลจากไฟล์ NCBI 
         if has_ncbi:
             for item in st.session_state['ncbi_cache']:
                 data, err = process_genbank(item['content'], item['filename'])
-                if data:
-                    results.append(data)
-                else:
-                    errors.append(err)
+                if data: results.append(data)
+                else: errors.append(err)
 
     if errors:
-        for e in errors:
-            st.error(e)
+        for e in errors: st.error(e)
 
     # ============================================
     # MODE A: Single File (Deep Dive)
@@ -240,10 +255,9 @@ else:
         st.markdown(f"### ผลการวิเคราะห์: {data['name']}")
         st.caption(f"File: {data['filename']} | จำนวนโครโมโซมที่พบ: {data['total_chromosomes']} โครโมโซม")
         
-        # --- ระบบสลับโครโมโซมด้วยการจิ้มแท่งกราฟโดยตรง ---
         chrom_ids = list(data['chromosomes'].keys())
         
-        # ล็อกตัวแปรลงใน Session State เพื่อจำว่าตอนนี้เลือกแท่งไหนอยู่
+        # บันทึกค่าโครโมโซมที่ถูกเลือกเข้า Session State
         if 'selected_chrom_id' not in st.session_state or st.session_state.selected_chrom_id not in chrom_ids:
             st.session_state.selected_chrom_id = chrom_ids[0]
             
@@ -251,7 +265,6 @@ else:
             st.markdown("### 🧬 แผนผังโครโมโซม (Chromosome Map)")
             st.write("👆 **คลิกจิ้มเลือกที่แท่งโครโมโซม** ในแผนผังด้านล่างนี้ เพื่อสลับดูสถิติและข้อมูลเชิงลึกได้ทันที")
 
-            # 1. จัดเตรียมข้อมูลสำหรับวาดรูป
             c_names = []
             c_lengths = []
             for cid in chrom_ids:
@@ -263,15 +276,15 @@ else:
 
             name_to_id = dict(zip(c_names, chrom_ids))
 
-            # 2. สร้างระบบไฮไลท์สี: แท่งที่ถูกเลือกจะเป็นสีม่วงเด่น แท่งอื่นจะใสจางๆ แบบ NCBI
+            # ทำไฮไลท์สีตามการคลิกเลือก
             colors = []
             line_colors = []
             for cid in chrom_ids:
                 if cid == st.session_state.selected_chrom_id:
-                    colors.append('rgba(99, 102, 241, 0.7)') # ไฮไลท์น้ำเงิน/ม่วงแบบทึบแสง
+                    colors.append('rgba(99, 102, 241, 0.7)') 
                     line_colors.append('#818cf8')
                 else:
-                    colors.append('rgba(255, 255, 255, 0.08)') # สีจางโปร่งใส
+                    colors.append('rgba(255, 255, 255, 0.08)') 
                     line_colors.append('#9CA3AF')
 
             fig = go.Figure(data=[
@@ -295,22 +308,17 @@ else:
                 dragmode=False
             )
             
-            # เปิดโหมดดักฟังคำสั่งคลิกเลือกวัตถุบนตัวกราฟ
+            # เปิดระบบรับ Event การจิ้มบนแท่งกราฟ
             chart_event = st.plotly_chart(
-                fig, 
-                use_container_width=True, 
-                config={'displayModeBar': False},
-                on_select="rerun",  # สั่งหน้าเว็กรันใหม่ทันทีเมื่อจิ้มกราฟ
-                selection_mode="points"
+                fig, use_container_width=True, config={'displayModeBar': False},
+                on_select="rerun", selection_mode="points"
             )
             
-            # ตรวจสอบตัวแปรเหตุการณ์ว่ามีคนเอาเมาส์ไปจิ้มแท่งกราฟไหม
             if chart_event and "selection" in chart_event and "points" in chart_event["selection"]:
                 points = chart_event["selection"]["points"]
                 if len(points) > 0:
                     clicked_x = points[0]["x"]
                     clicked_id = name_to_id.get(clicked_x)
-                    # ถ้าคลิกแท่งใหม่ที่ไม่ซ้ำกับของเดิม ให้บันทึกค่าแล้วเปลี่ยนโครโมโซมทันที
                     if clicked_id and clicked_id != st.session_state.selected_chrom_id:
                         st.session_state.selected_chrom_id = clicked_id
                         st.rerun()
@@ -320,7 +328,6 @@ else:
         else:
             selected_chrom_id = chrom_ids[0]
             
-        # ดึงข้อมูลเฉพาะโครโมโซมที่ถูกเลือกมาใช้งาน
         c_data = data['chromosomes'][selected_chrom_id]
         
         # 1. Key Metrics 
@@ -335,17 +342,16 @@ else:
 
         # 2. Charts Row 1
         c1, c2 = st.columns(2)
-        
         with c1:
             st.markdown("**1. การกระจายตัวของ Intergenic Length**")
             lengths = [len(i) for i in c_data['intergenic_seqs'] if len(i) > 0]
             if lengths:
-                fig, ax = plt.subplots(figsize=(6, 4))
+                fig3, ax = plt.subplots(figsize=(6, 4))
                 ax.hist(lengths, bins=50, color="#818cf8", edgecolor='#1f2937', alpha=0.9)
                 ax.set_xlabel("Length (bp)")
                 ax.set_ylabel("Frequency")
                 ax.grid(axis='y', alpha=0.2, linestyle='--')
-                st.pyplot(fig)
+                st.pyplot(fig3)
             else:
                 st.warning("ไม่พบ Intergenic Regions")
 
@@ -388,18 +394,14 @@ else:
         st.subheader("Advanced Analysis: Repeats & Data")
         
         ac1, ac2 = st.columns(2)
-        
         with ac1:
             st.markdown("#### Motif Search in Junk DNA")
             st.caption("ค้นหาจำนวนจุดที่พบรหัสพันธุกรรมซ้ำๆ ในส่วน Non-coding")
             
             sc1, sc2 = st.columns(2)
-            with sc1:
-                motif_input = st.text_input("Pattern (e.g. AT, G)", value="AT")
-            with sc2:
-                threshold_input = st.number_input("Min Repeats", min_value=3, value=5)
+            with sc1: motif_input = st.text_input("Pattern (e.g. AT, G)", value="AT")
+            with sc2: threshold_input = st.number_input("Min Repeats", min_value=3, value=5)
             
-            # Search
             total_repeats = 0
             for s in c_data['intergenic_seqs']:
                 total_repeats += find_simple_repeats(s, motif_input, threshold_input)
@@ -422,15 +424,11 @@ else:
                 mime="text/plain"
             )
             
-        # ============================================
-        # เพิ่มเติม: ส่วนเปรียบเทียบโครโมโซมภายในสิ่งมีชีวิตเดียวกัน
-        # ============================================
         if data['total_chromosomes'] > 1:
             st.markdown("---")
             st.markdown(f"### 📊 เปรียบเทียบโครโมโซมภายใน {data['name']} (Intra-organism)")
             st.write("ตารางและกราฟแสดงการเปรียบเทียบค่าสถิติระหว่างโครโมโซมต่างๆ ภายในสิ่งมีชีวิตนี้")
 
-            # 1. เตรียมข้อมูลตาราง
             chrom_list = []
             for cid, cinfo in data['chromosomes'].items():
                 chrom_list.append({
@@ -441,44 +439,29 @@ else:
                     "Non-coding (Junk) %": cinfo['nc_pct']
                 })
             df_chroms = pd.DataFrame(chrom_list)
-
-            # แสดงตาราง
             st.dataframe(df_chroms.style.highlight_max(axis=0, color='#1e40af'), use_container_width=True)
 
-            # 2. กราฟเปรียบเทียบโครโมโซม
             cc1, cc2 = st.columns(2)
-            
             with cc1:
                 st.markdown("**เปรียบเทียบขนาดโครโมโซม**")
-                # ใช้ Plotly สร้างกราฟแท่งแบบ Interactive
                 fig_c1 = px.bar(
-                    df_chroms, 
-                    x="Chromosome", 
-                    y="Length (bp)", 
-                    color="GC %", 
-                    template="plotly_dark",
-                    color_continuous_scale="Viridis"
+                    df_chroms, x="Chromosome", y="Length (bp)", color="GC %", 
+                    template="plotly_dark", color_continuous_scale="Viridis"
                 )
                 st.plotly_chart(fig_c1, use_container_width=True)
                 
             with cc2:
                 st.markdown("**ความสัมพันธ์: ขนาดโครโมโซม vs Non-coding %**")
-                # ใช้ Plotly สร้าง Scatter Plot
                 fig_c2 = px.scatter(
-                    df_chroms, 
-                    x="Length (bp)", 
-                    y="Non-coding (Junk) %", 
-                    color="GC %", 
-                    size="Length (bp)",
-                    hover_name="Chromosome", 
-                    template="plotly_dark",
+                    df_chroms, x="Length (bp)", y="Non-coding (Junk) %", color="GC %", 
+                    size="Length (bp)", hover_name="Chromosome", template="plotly_dark",
                     color_continuous_scale="Viridis"
                 )
                 st.plotly_chart(fig_c2, use_container_width=True)
 
-    # ============================================
-    # MODE B: Multi-File (Comparison)
-    # ============================================
+# ============================================
+# MODE B: Multi-File (Comparison)
+# ============================================
     elif len(results) > 1:
         st.markdown(f"### เปรียบเทียบสิ่งมีชีวิต ({len(results)} ตัวอย่าง)")
         
@@ -492,29 +475,20 @@ else:
             } for r in results
         ])
 
-        # 1. Summary Table
         st.markdown("#### ตารางสรุปข้อมูล (Summary Table)")
         st.dataframe(df.style.highlight_max(axis=0, color='#1e40af'), use_container_width=True)
 
-        # 2. Interactive Charts
         st.markdown("---")
         st.markdown("#### ความสัมพันธ์: ขนาดจีโนม vs Junk DNA (Interactive)")
         st.caption("ℹ️ เอาเมาส์ชี้ที่จุดเพื่อดูชื่อสิ่งมีชีวิต / หมุนลูกกลิ้งเพื่อซูม")
         
-        fig = px.scatter(
-            df, 
-            x="Length (bp)", 
-            y="Non-coding %",
-            color="GC %",
-            size="Length (bp)",
-            hover_name="Organism",
-            color_continuous_scale="Viridis",
-            template="plotly_dark",
+        fig_scatter = px.scatter(
+            df, x="Length (bp)", y="Non-coding %", color="GC %", size="Length (bp)",
+            hover_name="Organism", color_continuous_scale="Viridis", template="plotly_dark",
             title="Genome Size vs. Non-coding DNA %"
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig_scatter, use_container_width=True)
 
-        # 3. Static Comparison
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("**เปรียบเทียบ Junk DNA %**")
