@@ -41,12 +41,14 @@ def fetch_ncbi(acc_id, email):
     acc_id = acc_id.strip().upper()
     
     if acc_id.startswith("GCF_") or acc_id.startswith("GCA_"):
+        # 1. ค้นหา Assembly ID
         with Entrez.esearch(db="assembly", term=acc_id) as search_handle:
             search_rec = Entrez.read(search_handle)
             if not search_rec["IdList"]:
                 raise Exception(f"ไม่พบข้อมูลสำหรับ Assembly: {acc_id}")
             assembly_id = search_rec["IdList"][0]
         
+        # 2. แกะกล่อง หาลิงก์โครโมโซมย่อยๆ ไปยังฐานข้อมูล Nucleotide
         with Entrez.elink(dbfrom="assembly", db="nucleotide", id=assembly_id) as link_handle:
             link_rec = Entrez.read(link_handle)
             if not link_rec[0].get("LinkSetDb"):
@@ -57,6 +59,7 @@ def fetch_ncbi(acc_id, email):
             if len(nucl_ids) > 50:
                 raise Exception(f"จีโนมนี้ประกอบด้วยชิ้นส่วนถึง {len(nucl_ids)} ชิ้น แนะนำให้ดาวน์โหลดไฟล์ .gbff จากเว็บ NCBI มาอัปโหลดเองครับ")
             
+            # 3. ดาวน์โหลดโครโมโซมย่อยทั้งหมดรวดเดียว
             id_string = ",".join(nucl_ids)
             with Entrez.efetch(db="nucleotide", id=id_string, rettype="gbwithparts", retmode="text") as fetch_handle:
                 return fetch_handle.read()
@@ -109,11 +112,10 @@ def process_genbank(file_content, filename):
         
         # Extract CDS & Amino Acids
         cds_regions = []
-        protein_seqs = []  # เก็บสายกรดอะมิโนของโครโมโซมนี้
+        protein_seqs = []  
         for f in record.features:
             if f.type == "CDS":
                 cds_regions.append((int(f.location.start), int(f.location.end)))
-                # ดึงรหัสกรดอะมิโนที่แปลไว้แล้วยัดใส่ลิสต์
                 if 'translation' in f.qualifiers:
                     protein_seqs.append(f.qualifiers['translation'][0].upper())
                     
@@ -135,7 +137,7 @@ def process_genbank(file_content, filename):
         if prev < slen:
             intergenic_seqs.append(seq[prev:slen])
 
-        # คำนวณความถี่ของกรดอะมิโนแต่ละชนิดบนโครโมโซมนี้ (มาตรฐาน 20 ชนิด)
+        # คำนวณความถี่ของกรดอะมิโน
         all_proteins_combined = "".join(protein_seqs)
         aa_list = list("ACDEFGHIKLMNPQRSTVWY")
         aa_dist = {aa: all_proteins_combined.count(aa) for aa in aa_list} if all_proteins_combined else {}
@@ -150,7 +152,7 @@ def process_genbank(file_content, filename):
             "nc_pct": nc_pct,
             "intergenic_seqs": intergenic_seqs,
             "gc_total": calculate_gc(seq),
-            "aa_dist": aa_dist, # ส่งข้อมูลกรดอะมิโนออกไป
+            "aa_dist": aa_dist, 
             "total_proteins": len(protein_seqs)
         }
 
@@ -402,20 +404,34 @@ else:
         if vals:
             st.area_chart(pd.DataFrame({'GC%': vals}, index=pos), color="#6366f1")
 
-        # --- 🧬 ส่วนเสริมใหม่: สัดส่วนกรดอะมิโนบนโครโมโซม ---
+        # --- 🧬 ส่วนเสริม: สัดส่วนกรดอะมิโนบนโครโมโซม (อัปเดตชื่อเต็มภาษาไทย-อังกฤษ) ---
         st.divider()
         st.markdown(f"**4. สัดส่วนการกระจายตัวของกรดอะมิโน (Amino Acid Composition) - พบโปรตีนทั้งหมด {c_data['total_proteins']:,} ชนิด**")
         if c_data.get('aa_dist'):
-            # แปลง Dict เป็น DataFrame เพื่อพล็อตกราฟ
             df_aa = pd.DataFrame(list(c_data['aa_dist'].items()), columns=['Amino Acid', 'Count'])
-            df_aa = df_aa.sort_values(by="Count", ascending=False) # เรียงลำดับจากมากไปน้อย
+            
+            # 🛠️ แผนผังจับคู่รหัสย่อ 1 ตัวอักษร ให้เป็นชื่อเต็มพ่วงภาษาไทย
+            aa_full_names = {
+                'A': 'Alanine (อะลานีน)', 'C': 'Cysteine (ซิสเตอีน)', 'D': 'Aspartic acid (กรดแอสพาร์ติก)',
+                'E': 'Glutamic acid (กรดกลูตามิก)', 'F': 'Phenylalanine (ฟีนิลอะลานีน)', 'G': 'Glycine (ไกลซีน)',
+                'H': 'Histidine (ฮิสทิดีน)', 'I': 'Isoleucine (ไอโซลิวซีน)', 'K': 'Lysine (ไลซีน)',
+                'L': 'Leucine (ลิวซีน)', 'M': 'Methionine (เมไทโอนีน)', 'N': 'Asparagine (แอสพาราจีน)',
+                'P': 'Proline (โพรลีน)', 'Q': 'Glutamine (กลูตามีน)', 'R': 'Arginine (อาร์จินีน)',
+                'S': 'Serine (เซรีน)', 'T': 'Threonine (ทรีโอนีน)', 'V': 'Valine (วาลีน)',
+                'W': 'Tryptophan (ทริปโตเฟน)', 'Y': 'Tyrosine (ไทโรซีน)'
+            }
+            # ทำการแปลงรหัสย่อในคอลัมน์ให้เป็นชื่อเต็ม
+            df_aa['Amino Acid'] = df_aa['Amino Acid'].map(aa_full_names)
+            
+            # เรียงลำดับจากกรดอะมิโนที่พบมากที่สุดไปหาน้อยที่สุด
+            df_aa = df_aa.sort_values(by="Count", ascending=False) 
             
             fig_aa = px.bar(
                 df_aa, x='Amino Acid', y='Count', color='Count',
                 template='plotly_dark', color_continuous_scale="Blugrn",
-                labels={"Count": "จำนวนพบคอร์โดน (ครั้ง)"}
+                labels={"Count": "จำนวนครั้งที่พบ"}
             )
-            fig_aa.update_layout(margin=dict(l=0, r=0, t=20, b=0), height=350)
+            fig_aa.update_layout(margin=dict(l=0, r=0, t=20, b=0), height=380)
             st.plotly_chart(fig_aa, use_container_width=True, config={'displayModeBar': False})
         else:
             st.info("⚠️ ไม่พบลำดับข้อมูลกรดอะมิโน (Translation Feature) ในไฟล์นี้")
