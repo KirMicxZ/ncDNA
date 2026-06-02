@@ -157,7 +157,7 @@ def process_genbank(file_content, filename):
             "total_proteins": len(protein_seqs)
         }
 
-    # --- 🛠️ เพิ่มระบบจัดเรียงลำดับโครโมโซมตามลำดับธรรมชาติ (Natural Sorting) ---
+    # --- 🛠️ ระบบจัดเรียงลำดับโครโมโซมตามลำดับธรรมชาติ (Natural Sorting) ---
     def roman_to_int(roman_str):
         roman_dict = {'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000}
         res = 0
@@ -174,13 +174,12 @@ def process_genbank(file_content, filename):
         if match:
             val = match.group(1).upper()
             if val.isdigit():
-                return (0, int(val), val) # กลุ่มที่ 0: ตัวเลขปกติ (1, 2, 3...)
+                return (0, int(val), val) 
             if re.match(r'^M{0,4}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$', val) and val != "":
-                return (0, roman_to_int(val), val) # กลุ่มที่ 0: ตัวเลขโรมัน (I, II, III...)
-            return (1, 0, val) # กลุ่มที่ 1: ข้อความอื่นๆ เช่น X, Y, Z
-        return (2, 0, item[0]) # กลุ่มที่ 2: ออร์แกเนลล์ นอกนิวเคลียส (Mitochondrion / Plasmid) ให้ไปท้ายสุด
+                return (0, roman_to_int(val), val) 
+            return (1, 0, val) 
+        return (2, 0, item[0]) 
 
-    # เรียงลำดับ Dictionary ใหม่ตามคีย์ที่เราคำนวณ
     chromosomes_data = dict(sorted(chromosomes_data.items(), key=chrom_key))
     # -----------------------------------------------------------------------
 
@@ -203,7 +202,6 @@ def get_ai_response(api_key, prompt):
         return "⚠️ กรุณาระบุ Google API Key ในแถบเมนูด้านซ้ายเพื่อใช้งานฟีเจอร์ AI"
     try:
         genai.configure(api_key=api_key)
-        # ใช้โมดูลรุ่นเสถียรปัจจุบัน
         model = genai.GenerativeModel('gemini-2.5-flash') 
         with st.spinner('AI กำลังวิเคราะห์ข้อมูลชีวสารสนเทศ...'):
             response = model.generate_content(prompt)
@@ -482,14 +480,14 @@ else:
         else:
             st.info("⚠️ ไม่พบลำดับข้อมูลกรดอะมิโน (Translation Feature) ในไฟล์นี้")
 
-        # --- 🤖 ส่วนเสริม: ระบบวิเคราะห์และถามตอบด้วย AI รายโครโมโซม ---
+        # --- 🤖 ส่วนเสริม: ระบบวิเคราะห์และถามตอบด้วย AI รายโครโมโซม (อัปเดต Focus Prompt) ---
         st.divider()
         st.subheader("🧬 AI Biological Assistant")
         ai_col1, ai_col2 = st.columns([1, 2])
         
         with ai_col1:
-            st.markdown("สามารถพิมพ์คำถามเจาะจง หรือเว้นว่างไว้เพื่อขอให้ AI สรุปคุณลักษณะทางวิวัฒนาการและความซับซ้อนของโครโมโซมเส้นนี้ได้")
-            user_question = st.text_input("💡 ถามคำถามชีววิทยาเกี่ยวกับโครโมโซมนี้", placeholder="เช่น สัดส่วน Junk DNA ขนาดนี้บอกอะไรเราได้บ้าง?")
+            st.markdown("ระบบจะส่งสถิติของทุกโครโมโซมให้ AI เห็นภาพรวม แต่สั่งให้ AI **โฟกัสคำตอบเฉพาะโครโมโซมที่คุณเลือก** หรือตอบคำถามเฉพาะเจาะจงด้านล่าง")
+            user_question = st.text_input("💡 ถามคำถามชีววิทยาเกี่ยวกับโครโมโซมนี้", placeholder="เช่น ทำไมโครโมโซมนี้ถึงมีกรดอะมิโน Serine มากเป็นพิเศษเมื่อเทียบกับแท่งอื่น?")
             run_ai = st.button("✨ เริ่มการวิเคราะห์ด้วย AI")
             
         with ai_col2:
@@ -497,27 +495,46 @@ else:
                 if not api_key:
                     st.error("❌ กรุณากรอก Google API Key ที่แถบเมนูด้านซ้ายก่อนกดปุ่มวิเคราะห์ครับ")
                 else:
-                    ai_context = f"""
-                    You are an expert Bioinformatics AI Assistant. Analyze the following genomic statistics:
+                    # 1. สร้างตารางสรุปสถิติของ "ทุกโครโมโซม" เพื่อให้ AI ใช้เปรียบเทียบแนวโน้ม (Global Genome Context)
+                    all_chroms_summary = ""
+                    for cid, cinfo in data['chromosomes'].items():
+                        all_chroms_summary += f"- โครโมโซม {cid}: ความยาว={cinfo['len']:,} bp, GC={cinfo['gc_total']:.2f}%, Non-coding={cinfo['nc_pct']:.2f}%, จำนวนโปรตีน={cinfo['total_proteins']:,} ชนิด\n"
+                    
+                    # 2. ออกแบบ Prompt สั่งควบคุมโฟกัสของ AI อย่างเข้มงวด
+                    prompt = f"""
+                    You are an expert Bioinformatics AI Assistant. Analyze the genomic data of this organism.
+                    
+                    [GLOBAL GENOME CONTEXT]
                     Organism Classification Name: {data['name']}
-                    Active Investigated Chromosome/Sequence ID: {selected_chrom_id} ({c_data['desc']})
-                    Sequence Length: {c_data['len']:,} bp
+                    Total Chromosomes in this file: {data['total_chromosomes']}
+                    Here is the statistical summary of ALL chromosomes for your baseline comparison:
+                    {all_chroms_summary}
+                    
+                    [TARGET FOCUS - โครโมโซมที่ผู้ใช้เลือกตรวจสอบอยู่ตอนนี้]
+                    Selected Chromosome ID: {selected_chrom_id}
+                    Description: {c_data['desc']}
+                    Length: {c_data['len']:,} bp
                     GC Content: {c_data['gc_total']:.2f}%
                     Coding Region (CDS) Ratio: {c_data['coding_pct']:.2f}%
                     Non-coding Region (Junk DNA) Ratio: {c_data['nc_pct']:.2f}%
-                    Total Identifiable Protein Products: {c_data['total_proteins']:,}
-                    """
+                    Total Protein Products: {c_data['total_proteins']:,}
+                    Amino Acid Distribution on this targeted chromosome: {c_data['aa_dist']}
                     
-                    if user_question:
-                        prompt = f"{ai_context}\nUser Question: {user_question}\nPlease provide a detailed, scientifically rigorous answer in Thai language."
-                    else:
-                        prompt = f"{ai_context}\nPlease provide a comprehensive biological summary based on these chromosome metrics. Discuss what its size, GC distribution, and coding/non-coding ratio imply about the organism's evolutionary position or genomic complexity. Answer beautifully in Thai."
+                    [USER QUESTION / INTENT]
+                    Question: {user_question if user_question else "Please provide a comprehensive biological analysis and evolutionary summary of the selected chromosome."}
+                    
+                    CRITICAL INSTRUCTION:
+                    1. Focus your answer primarily on the [TARGET FOCUS] chromosome and directly answer the user's question or analyze it deeply.
+                    2. Use the [GLOBAL GENOME CONTEXT] data only to make meaningful biological comparisons (e.g., pointing out if the selected chromosome has distinct patterns like higher/lower GC or specific amino acid abundance compared to the rest of the genome).
+                    3. Do not generalize the answer to the whole genome unless making a comparison. Keep the focus tight.
+                    4. Answer in scientifically rigorous, clear, and beautiful Thai language.
+                    """
                     
                     response_text = get_ai_response(api_key, prompt)
                     st.markdown("### 📝 สรุปและคำแนะนำจาก AI")
                     st.info(response_text)
             else:
-                st.info("💡 ระบุ API Key ทางซ้ายมือ แล้วกดปุ่มวิเคราะห์เพื่อรับข้อมูลเชิงลึกทางชีววิทยาจาก AI")
+                st.info("💡 ระบุ API Key ทางซ้ายมือ แล้วกดปุ่มวิเคราะห์เพื่อรับข้อมูลเชิงลึกจาก AI")
 
         # 5. Advanced Analysis Section
         st.markdown("---")
