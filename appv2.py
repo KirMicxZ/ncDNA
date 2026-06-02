@@ -170,14 +170,28 @@ else:
     if len(results) == 1:
         data = results[0]
         st.markdown(f"### ผลการวิเคราะห์: {data['name']}")
-        st.caption(f"File: {data['filename']} | ID: {data['id']}")
+        st.caption(f"File: {data['filename']} | จำนวนโครโมโซมที่พบ: {data['total_chromosomes']} โครโมโซม")
         
-        # 1. Key Metrics
+        # --- สร้างกล่องเลือกโครโมโซม ---
+        chrom_ids = list(data['chromosomes'].keys())
+        if len(chrom_ids) > 1:
+            selected_chrom_id = st.selectbox(
+                "🧬 เลือกโครโมโซมที่ต้องการตรวจสอบ", 
+                options=chrom_ids,
+                format_func=lambda x: f"{x} ({data['chromosomes'][x]['desc']})"
+            )
+        else:
+            selected_chrom_id = chrom_ids[0]
+            
+        # ดึงข้อมูลเฉพาะโครโมโซมที่ถูกเลือกมาใช้งาน
+        c_data = data['chromosomes'][selected_chrom_id]
+        
+        # 1. Key Metrics (เปลี่ยนมาใช้ตัวแปร c_data)
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Genome Length", f"{data['len']:,} bp")
-        m2.metric("GC Content", f"{data['gc_total']:.2f}%")
-        m3.metric("Coding DNA (CDS)", f"{data['coding_pct']:.2f}%")
-        m4.metric("Junk/Non-coding", f"{data['nc_pct']:.2f}%")
+        m1.metric("Chromosome Length", f"{c_data['len']:,} bp")
+        m2.metric("GC Content", f"{c_data['gc_total']:.2f}%")
+        m3.metric("Coding DNA (CDS)", f"{c_data['coding_pct']:.2f}%")
+        m4.metric("Junk/Non-coding", f"{c_data['nc_pct']:.2f}%")
         
         st.divider()
 
@@ -186,7 +200,7 @@ else:
         
         with c1:
             st.markdown("**1. การกระจายตัวของ Intergenic Length**")
-            lengths = [len(i) for i in data['intergenic_seqs'] if len(i) > 0]
+            lengths = [len(i) for i in c_data['intergenic_seqs'] if len(i) > 0]
             if lengths:
                 fig, ax = plt.subplots(figsize=(6, 4))
                 ax.hist(lengths, bins=50, color="#818cf8", edgecolor='#1f2937', alpha=0.9)
@@ -199,8 +213,8 @@ else:
 
         with c2:
             st.markdown("**2. GC-Content Comparison**")
-            gc_coding = [calculate_gc(data['seq'][s:e]) for s, e in data['cds_regions']]
-            gc_nc = [calculate_gc(s) for s in data['intergenic_seqs'] if len(s) > 0]
+            gc_coding = [calculate_gc(c_data['seq'][s:e]) for s, e in c_data['cds_regions']]
+            gc_nc = [calculate_gc(s) for s in c_data['intergenic_seqs'] if len(s) > 0]
             
             if gc_coding and gc_nc:
                 fig2, ax2 = plt.subplots(figsize=(6, 4))
@@ -219,7 +233,7 @@ else:
         # 3. Sliding Window
         st.markdown("**3. GC% Variation (Sliding Window)**")
         window = 1000
-        seq = data['seq']
+        seq = c_data['seq']
         pos = []
         vals = []
         for i in range(0, len(seq), window):
@@ -249,7 +263,7 @@ else:
             
             # Search
             total_repeats = 0
-            for s in data['intergenic_seqs']:
+            for s in c_data['intergenic_seqs']:
                 total_repeats += find_simple_repeats(s, motif_input, threshold_input)
             
             st.metric(f"Found '{motif_input}' repeated >{threshold_input} times", f"{total_repeats:,} spots")
@@ -259,14 +273,14 @@ else:
             st.caption("ดาวน์โหลดลำดับเบสส่วน Junk DNA (FASTA) เพื่อนำไปวิเคราะห์ต่อ")
             
             fasta_str = ""
-            for i, seq_segment in enumerate(data['intergenic_seqs']):
+            for i, seq_segment in enumerate(c_data['intergenic_seqs']):
                 if len(seq_segment) > 0:
-                    fasta_str += f">Intergenic_{i+1}\n{seq_segment}\n"
+                    fasta_str += f">Intergenic_{i+1}_{c_data['id']}\n{seq_segment}\n"
             
             st.download_button(
                 label="Download Non-coding Sequences (.fasta)",
                 data=fasta_str,
-                file_name=f"{data['id']}_junk_dna.fasta",
+                file_name=f"{c_data['id']}_junk_dna.fasta",
                 mime="text/plain"
             )
 
