@@ -1,5 +1,5 @@
 import streamlit as st
-from Bio import SeqIO
+from Bio import SeqIO, Entrez  # เพิ่มการ import Entrez เข้ามา
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -27,9 +27,19 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# สร้าง Session State สำหรับเก็บข้อมูลจาก NCBI
+if 'ncbi_cache' not in st.session_state:
+    st.session_state['ncbi_cache'] = []
+
 # ============================================
 # 2. Helper Functions (Logic)
 # ============================================
+def fetch_ncbi(acc_id, email):
+    """ดึงข้อมูล GenBank จาก NCBI ผ่าน API"""
+    Entrez.email = email
+    with Entrez.efetch(db="nucleotide", id=acc_id, rettype="gbwithparts", retmode="text") as handle:
+        return handle.read()
+
 @st.cache_data
 def calculate_gc(sequence):
     if not sequence: return 0
@@ -120,6 +130,36 @@ with st.sidebar:
     st.title("Genome Analyzer")
     st.markdown("เครื่องมือวิเคราะห์โครงสร้างจีโนม")
     
+    # --- เพิ่มระบบดาวน์โหลดจาก NCBI ---
+    st.markdown("---")
+    st.subheader("🌐 ดึงข้อมูลจาก NCBI")
+    ncbi_email = st.text_input("Email (จำเป็น)", placeholder="email@example.com")
+    ncbi_id = st.text_input("RefSeq ID", placeholder="เช่น NC_000913")
+    
+    if st.button("📥 ดาวน์โหลดจาก NCBI"):
+        if not ncbi_email or not ncbi_id:
+            st.error("กรุณากรอก Email และ RefSeq ID ให้ครบถ้วน")
+        else:
+            with st.spinner(f"กำลังดาวน์โหลด {ncbi_id} (อาจใช้เวลาสักครู่)..."):
+                try:
+                    raw_data = fetch_ncbi(ncbi_id.strip(), ncbi_email.strip())
+                    if not any(item['id'] == ncbi_id for item in st.session_state['ncbi_cache']):
+                        st.session_state['ncbi_cache'].append({
+                            "id": ncbi_id.strip(),
+                            "filename": f"NCBI_{ncbi_id.strip()}.gbff",
+                            "content": raw_data
+                        })
+                    st.success(f"ดาวน์โหลด {ncbi_id} สำเร็จ!")
+                except Exception as e:
+                    st.error(f"เกิดข้อผิดพลาดในการโหลด: {e}")
+                    
+    if st.session_state['ncbi_cache']:
+        st.markdown(f"*(มีข้อมูลจาก NCBI จำนวน {len(st.session_state['ncbi_cache'])} รายการ)*")
+        if st.button("🗑️ ล้างข้อมูล NCBI"):
+            st.session_state['ncbi_cache'] = []
+            st.rerun()
+            
+    # --- ระบบอัปโหลดไฟล์เดิม ---
     st.markdown("---")
     st.subheader("📂 อัปโหลดไฟล์")
     uploaded_files = st.file_uploader(
@@ -131,7 +171,7 @@ with st.sidebar:
     st.markdown("---")
     with st.expander("วิธีการใช้งาน"):
         st.markdown("""
-        1. **เตรียมไฟล์:** ไฟล์จีโนมสกุล `.gbff`
+        1. **เตรียมไฟล์:** ไฟล์จีโนมสกุล `.gbff` หรือใช้ RefSeq ID ดาวน์โหลดผ่านเน็ต
         2. **โหมดไฟล์เดียว:** แสดงกราฟเชิงลึก และสถิติเชิงตัวเลขของจีโนม
         3. **โหมดเปรียบเทียบ:** ดูตารางตัวเลขเทียบหลายสายพันธุ์ (Ranking) และกราฟ Interactive
         """)
@@ -144,8 +184,12 @@ with st.sidebar:
 
 st.markdown('<h1 class="main-header">Genome Analysis Dashboard</h1>', unsafe_allow_html=True)
 
-if not uploaded_files:
-    st.info("⬅️ กรุณาอัปโหลดไฟล์ .gbff ที่แถบเมนูด้านซ้ายเพื่อเริ่มต้น")
+# เช็คว่ามีไฟล์ที่อัปโหลด หรือ มีไฟล์จาก NCBI อย่างใดอย่างหนึ่งหรือไม่
+has_files = bool(uploaded_files)
+has_ncbi = bool(st.session_state['ncbi_cache'])
+
+if not has_files and not has_ncbi:
+    st.info("⬅️ กรุณาอัปโหลดไฟล์ .gbff หรือดึงข้อมูลจาก NCBI ที่แถบเมนูด้านซ้ายเพื่อเริ่มต้น")
     
     cols = st.columns(3)
     with cols[0]:
@@ -164,13 +208,24 @@ else:
     errors = []
     
     with st.spinner('กำลังประมวลผล DNA...'):
-        for uploaded_file in uploaded_files:
-            content = uploaded_file.getvalue().decode("utf-8")
-            data, err = process_genbank(content, uploaded_file.name)
-            if data:
-                results.append(data)
-            else:
-                errors.append(err)
+        # 1. ประมวลผลจากไฟล์ที่อัปโหลดเข้ามา
+        if has_files:
+            for uploaded_file in uploaded_files:
+                content = uploaded_file.getvalue().decode("utf-8")
+                data, err = process_genbank(content, uploaded_file.name)
+                if data:
+                    results.append(data)
+                else:
+                    errors.append(err)
+        
+        # 2. ประมวลผลจากไฟล์ NCBI 
+        if has_ncbi:
+            for item in st.session_state['ncbi_cache']:
+                data, err = process_genbank(item['content'], item['filename'])
+                if data:
+                    results.append(data)
+                else:
+                    errors.append(err)
 
     if errors:
         for e in errors:
