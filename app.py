@@ -7,7 +7,7 @@ import io
 import plotly.express as px
 import plotly.graph_objects as go  
 import re
-import google.generativeai as genai  # เพิ่มการนำเข้า Library สำหรับ AI
+import google.generativeai as genai  
 
 # ============================================
 # 1. Page Configuration & UI Setup
@@ -42,21 +42,25 @@ def fetch_ncbi(acc_id, email):
     acc_id = acc_id.strip().upper()
     
     if acc_id.startswith("GCF_") or acc_id.startswith("GCA_"):
+        # 1. ค้นหา Assembly ID
         with Entrez.esearch(db="assembly", term=acc_id) as search_handle:
             search_rec = Entrez.read(search_handle)
             if not search_rec["IdList"]:
                 raise Exception(f"ไม่พบข้อมูลสำหรับ Assembly: {acc_id}")
             assembly_id = search_rec["IdList"][0]
         
+        # 2. แกะกล่อง หาลิงก์โครโมโซมย่อยๆ ไปยังฐานข้อมูล Nucleotide
         with Entrez.elink(dbfrom="assembly", db="nucleotide", id=assembly_id) as link_handle:
             link_rec = Entrez.read(link_handle)
             if not link_rec[0].get("LinkSetDb"):
                 raise Exception(f"ไม่พบข้อมูลลำดับเบสที่เชื่อมโยงกับ Assembly: {acc_id}")
             
             nucl_ids = [link["Id"] for link in link_rec[0]["LinkSetDb"][0]["Link"]]
+            
             if len(nucl_ids) > 50:
                 raise Exception(f"จีโนมนี้ประกอบด้วยชิ้นส่วนถึง {len(nucl_ids)} ชิ้น แนะนำให้ดาวน์โหลดไฟล์ .gbff จากเว็บ NCBI มาอัปโหลดเองครับ")
             
+            # 3. ดาวน์โหลดโครโมโซมย่อยทั้งหมดรวดเดียว
             id_string = ",".join(nucl_ids)
             with Entrez.efetch(db="nucleotide", id=id_string, rettype="gbwithparts", retmode="text") as fetch_handle:
                 return fetch_handle.read()
@@ -83,7 +87,7 @@ def process_genbank(file_content, filename):
     except Exception as e:
         return None, f"Error reading {filename}: {e}"
 
-    # ระบบกรองโครโมโซมซ้ำ (Deduplication)
+    # ระบบกรองโครโมโซมซ้ำ (Deduplication) เพื่อแก้ปัญหาแท่งกราฟซ้อนกัน
     seen_short_names = set()
     filtered_records = []
     for record in records:
@@ -186,7 +190,7 @@ with st.sidebar:
     st.title("Genome Analyzer")
     st.markdown("เครื่องมือวิเคราะห์โครงสร้างจีโนม")
     
-    # --- 🤖 ส่วนตั้งค่า AI ---
+    # --- ส่วนตั้งค่า AI ---
     st.markdown("---")
     st.subheader("🤖 AI Configuration")
     api_key = st.text_input("Google API Key", type="password", help="ใส่ API Key จาก Google AI Studio เพื่อเปิดใช้งานฟีเจอร์วิเคราะห์ด้วย AI")
@@ -450,7 +454,7 @@ else:
         else:
             st.info("⚠️ ไม่พบลำดับข้อมูลกรดอะมิโน (Translation Feature) ในไฟล์นี้")
 
-        # --- 🤖 ส่วนเสริมใหม่: ระบบวิเคราะห์และถามตอบด้วย AI รายโครโมโซม ---
+        # --- 🤖 ส่วนเสริม: ระบบวิเคราะห์และถามตอบด้วย AI รายโครโมโซม ---
         st.divider()
         st.subheader("🧬 AI Biological Assistant")
         ai_col1, ai_col2 = st.columns([1, 2])
@@ -465,7 +469,6 @@ else:
                 if not api_key:
                     st.error("❌ กรุณากรอก Google API Key ที่แถบเมนูด้านซ้ายก่อนกดปุ่มวิเคราะห์ครับ")
                 else:
-                    # ออกแบบโครงสร้างสถิติส่งเข้าโมเดล
                     ai_context = f"""
                     You are an expert Bioinformatics AI Assistant. Analyze the following genomic statistics:
                     Organism Classification Name: {data['name']}
@@ -578,7 +581,7 @@ else:
         st.markdown("#### ตารางสรุปข้อมูล (Summary Table)")
         st.dataframe(df.style.highlight_max(axis=0, color='#1e40af'), use_container_width=True)
 
-        # --- 🤖 ส่วนเสริมใหม่: รายงานวิเคราะห์เปรียบเทียบข้ามสายพันธุ์ด้วย AI ---
+        # --- ส่วนเสริม: รายงานวิเคราะห์เปรียบเทียบข้ามสายพันธุ์ด้วย AI ---
         st.markdown("---")
         st.subheader("🤖 AI Comparative Insight")
         run_comp_ai = st.button("📊 สั่งให้ AI ทำรายงานวิเคราะห์เปรียบเทียบ")
