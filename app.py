@@ -7,6 +7,7 @@ import io
 import plotly.express as px
 import plotly.graph_objects as go  
 import re
+import google.generativeai as genai  # เพิ่มการนำเข้า Library สำหรับ AI
 
 # ============================================
 # 1. Page Configuration & UI Setup
@@ -41,25 +42,21 @@ def fetch_ncbi(acc_id, email):
     acc_id = acc_id.strip().upper()
     
     if acc_id.startswith("GCF_") or acc_id.startswith("GCA_"):
-        # 1. ค้นหา Assembly ID
         with Entrez.esearch(db="assembly", term=acc_id) as search_handle:
             search_rec = Entrez.read(search_handle)
             if not search_rec["IdList"]:
                 raise Exception(f"ไม่พบข้อมูลสำหรับ Assembly: {acc_id}")
             assembly_id = search_rec["IdList"][0]
         
-        # 2. แกะกล่อง หาลิงก์โครโมโซมย่อยๆ ไปยังฐานข้อมูล Nucleotide
         with Entrez.elink(dbfrom="assembly", db="nucleotide", id=assembly_id) as link_handle:
             link_rec = Entrez.read(link_handle)
             if not link_rec[0].get("LinkSetDb"):
                 raise Exception(f"ไม่พบข้อมูลลำดับเบสที่เชื่อมโยงกับ Assembly: {acc_id}")
             
             nucl_ids = [link["Id"] for link in link_rec[0]["LinkSetDb"][0]["Link"]]
-            
             if len(nucl_ids) > 50:
                 raise Exception(f"จีโนมนี้ประกอบด้วยชิ้นส่วนถึง {len(nucl_ids)} ชิ้น แนะนำให้ดาวน์โหลดไฟล์ .gbff จากเว็บ NCBI มาอัปโหลดเองครับ")
             
-            # 3. ดาวน์โหลดโครโมโซมย่อยทั้งหมดรวดเดียว
             id_string = ",".join(nucl_ids)
             with Entrez.efetch(db="nucleotide", id=id_string, rettype="gbwithparts", retmode="text") as fetch_handle:
                 return fetch_handle.read()
@@ -169,6 +166,19 @@ def process_genbank(file_content, filename):
         "gc_total": (total_gc / total_len) * 100 if total_len > 0 else 0
     }, None
 
+def get_ai_response(api_key, prompt):
+    """ฟังก์ชันส่งข้อมูลติดต่อกับ Gemini API เพื่อขอคำวิเคราะห์"""
+    if not api_key:
+        return "⚠️ กรุณาระบุ Google API Key ในแถบเมนูด้านซ้ายเพื่อใช้งานฟีเจอร์ AI"
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        with st.spinner('AI กำลังวิเคราะห์ข้อมูลชีวสารสนเทศ...'):
+            response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"เกิดข้อผิดพลาดในการเชื่อมต่อ AI: {str(e)}"
+
 # ============================================
 # 3. Sidebar: Inputs & Instructions
 # ============================================
@@ -176,6 +186,12 @@ with st.sidebar:
     st.title("Genome Analyzer")
     st.markdown("เครื่องมือวิเคราะห์โครงสร้างจีโนม")
     
+    # --- 🤖 ส่วนตั้งค่า AI ---
+    st.markdown("---")
+    st.subheader("🤖 AI Configuration")
+    api_key = st.text_input("Google API Key", type="password", help="ใส่ API Key จาก Google AI Studio เพื่อเปิดใช้งานฟีเจอร์วิเคราะห์ด้วย AI")
+    
+    # --- ระบบดาวน์โหลดจาก NCBI ---
     st.markdown("---")
     st.subheader("🌐 ดึงข้อมูลจาก NCBI")
     ncbi_email = st.text_input("Email (จำเป็น)", placeholder="email@example.com")
@@ -204,6 +220,7 @@ with st.sidebar:
             st.session_state['ncbi_cache'] = []
             st.rerun()
             
+    # --- ระบบอัปโหลดไฟล์เดิม ---
     st.markdown("---")
     st.subheader("📂 อัปโหลดไฟล์")
     uploaded_files = st.file_uploader(
@@ -216,8 +233,9 @@ with st.sidebar:
     with st.expander("วิธีการใช้งาน"):
         st.markdown("""
         1. **เตรียมไฟล์:** ไฟล์จีโนมสกุล `.gbff` หรือใช้ RefSeq ID ดาวน์โหลดผ่านเน็ต
-        2. **โหมดไฟล์เดียว:** แสดงกราฟเชิงลึก และสถิติเชิงตัวเลขของจีโนม
-        3. **โหมดเปรียบเทียบ:** ดูตารางตัวเลขเทียบหลายสายพันธุ์ (Ranking) และกราฟ Interactive
+        2. **ป้อน API Key:** หากต้องการใช้ระบบผู้ช่วยวิเคราะห์ AI แนะนำให้ระบุคีย์ที่แถบด้านซ้าย
+        3. **โหมดไฟล์เดียว:** คลิกเลือกแท่งโครโมโซมเพื่อดูรายละเอียดและสั่งงาน AI รายโครโมโซมได้
+        4. **โหมดเปรียบเทียบ:** เปรียบเทียบสถิติข้ามสายพันธุ์และให้ AI ช่วยสรุปความสัมพันธ์
         """)
     
     st.caption("Developed for High School Science Project")
@@ -241,8 +259,8 @@ if not has_files and not has_ncbi:
         st.markdown("### Comparison")
         st.write("เปรียบเทียบสิ่งมีชีวิตหลายสายพันธุ์ (Interactive)")
     with cols[2]:
-        st.markdown("### Data Export")
-        st.write("ดาวน์โหลดลำดับเบส Junk DNA ไปศึกษาต่อ")
+        st.markdown("### Data Export & AI Assistant")
+        st.write("ส่งออกข้อมูล Junk DNA และใช้ AI สรุปเชิงชีววิทยา")
 
 else:
     results = []
@@ -404,13 +422,12 @@ else:
         if vals:
             st.area_chart(pd.DataFrame({'GC%': vals}, index=pos), color="#6366f1")
 
-        # --- 🧬 ส่วนเสริม: สัดส่วนกรดอะมิโนบนโครโมโซม (อัปเดตชื่อเต็มภาษาไทย-อังกฤษ) ---
+        # --- 🧬 ส่วนเสริม: สัดส่วนกรดอะมิโนบนโครโมโซม ---
         st.divider()
         st.markdown(f"**4. สัดส่วนการกระจายตัวของกรดอะมิโน (Amino Acid Composition) - พบโปรตีนทั้งหมด {c_data['total_proteins']:,} ชนิด**")
         if c_data.get('aa_dist'):
             df_aa = pd.DataFrame(list(c_data['aa_dist'].items()), columns=['Amino Acid', 'Count'])
             
-            # 🛠️ แผนผังจับคู่รหัสย่อ 1 ตัวอักษร ให้เป็นชื่อเต็มพ่วงภาษาไทย
             aa_full_names = {
                 'A': 'Alanine (อะลานีน)', 'C': 'Cysteine (ซิสเตอีน)', 'D': 'Aspartic acid (กรดแอสพาร์ติก)',
                 'E': 'Glutamic acid (กรดกลูตามิก)', 'F': 'Phenylalanine (ฟีนิลอะลานีน)', 'G': 'Glycine (ไกลซีน)',
@@ -420,10 +437,7 @@ else:
                 'S': 'Serine (เซรีน)', 'T': 'Threonine (ทรีโอนีน)', 'V': 'Valine (วาลีน)',
                 'W': 'Tryptophan (ทริปโตเฟน)', 'Y': 'Tyrosine (ไทโรซีน)'
             }
-            # ทำการแปลงรหัสย่อในคอลัมน์ให้เป็นชื่อเต็ม
             df_aa['Amino Acid'] = df_aa['Amino Acid'].map(aa_full_names)
-            
-            # เรียงลำดับจากกรดอะมิโนที่พบมากที่สุดไปหาน้อยที่สุด
             df_aa = df_aa.sort_values(by="Count", ascending=False) 
             
             fig_aa = px.bar(
@@ -435,6 +449,44 @@ else:
             st.plotly_chart(fig_aa, use_container_width=True, config={'displayModeBar': False})
         else:
             st.info("⚠️ ไม่พบลำดับข้อมูลกรดอะมิโน (Translation Feature) ในไฟล์นี้")
+
+        # --- 🤖 ส่วนเสริมใหม่: ระบบวิเคราะห์และถามตอบด้วย AI รายโครโมโซม ---
+        st.divider()
+        st.subheader("🧬 AI Biological Assistant")
+        ai_col1, ai_col2 = st.columns([1, 2])
+        
+        with ai_col1:
+            st.markdown("สามารถพิมพ์คำถามเจาะจง หรือเว้นว่างไว้เพื่อขอให้ AI สรุปคุณลักษณะทางวิวัฒนาการและความซับซ้อนของโครโมโซมเส้นนี้ได้")
+            user_question = st.text_input("💡 ถามคำถามชีววิทยาเกี่ยวกับโครโมโซมนี้", placeholder="เช่น สัดส่วน Junk DNA ขนาดนี้บอกอะไรเราได้บ้าง?")
+            run_ai = st.button("✨ เริ่มการวิเคราะห์ด้วย AI")
+            
+        with ai_col2:
+            if run_ai:
+                if not api_key:
+                    st.error("❌ กรุณากรอก Google API Key ที่แถบเมนูด้านซ้ายก่อนกดปุ่มวิเคราะห์ครับ")
+                else:
+                    # ออกแบบโครงสร้างสถิติส่งเข้าโมเดล
+                    ai_context = f"""
+                    You are an expert Bioinformatics AI Assistant. Analyze the following genomic statistics:
+                    Organism Classification Name: {data['name']}
+                    Active Investigated Chromosome/Sequence ID: {selected_chrom_id} ({c_data['desc']})
+                    Sequence Length: {c_data['len']:,} bp
+                    GC Content: {c_data['gc_total']:.2f}%
+                    Coding Region (CDS) Ratio: {c_data['coding_pct']:.2f}%
+                    Non-coding Region (Junk DNA) Ratio: {c_data['nc_pct']:.2f}%
+                    Total Identifiable Protein Products: {c_data['total_proteins']:,}
+                    """
+                    
+                    if user_question:
+                        prompt = f"{ai_context}\nUser Question: {user_question}\nPlease provide a detailed, scientifically rigorous answer in Thai language."
+                    else:
+                        prompt = f"{ai_context}\nPlease provide a comprehensive biological summary based on these chromosome metrics. Discuss what its size, GC distribution, and coding/non-coding ratio imply about the organism's evolutionary position or genomic complexity. Answer beautifully in Thai."
+                    
+                    response_text = get_ai_response(api_key, prompt)
+                    st.markdown("### 📝 สรุปและคำแนะนำจาก AI")
+                    st.info(response_text)
+            else:
+                st.info("💡 ระบุ API Key ทางซ้ายมือ แล้วกดปุ่มวิเคราะห์เพื่อรับข้อมูลเชิงลึกทางชีววิทยาจาก AI")
 
         # 5. Advanced Analysis Section
         st.markdown("---")
@@ -522,9 +574,34 @@ else:
             } for r in results
         ])
 
+        # 1. Summary Table
         st.markdown("#### ตารางสรุปข้อมูล (Summary Table)")
         st.dataframe(df.style.highlight_max(axis=0, color='#1e40af'), use_container_width=True)
 
+        # --- 🤖 ส่วนเสริมใหม่: รายงานวิเคราะห์เปรียบเทียบข้ามสายพันธุ์ด้วย AI ---
+        st.markdown("---")
+        st.subheader("🤖 AI Comparative Insight")
+        run_comp_ai = st.button("📊 สั่งให้ AI ทำรายงานวิเคราะห์เปรียบเทียบ")
+        if run_comp_ai:
+            if not api_key:
+                st.error("❌ กรุณากรอก Google API Key ที่แถบเมนูด้านซ้ายก่อนกดปุ่มวิเคราะห์ครับ")
+            else:
+                data_str = df.to_string()
+                prompt = f"""
+                You are a Bioinformatics expert. Analyze this comparative data table of multiple organisms:
+                {data_str}
+                
+                Please provide a rigorous comparative analysis addressing:
+                1. Which organism demonstrates higher genetic complexity or evolutionary advancement based on genome size and coding vs non-coding ratios?
+                2. Identify if there's any correlation between GC content variants and environmental adaptations or lifestyle among these species.
+                3. Comment on the distribution patterns of Non-coding DNA (Junk DNA).
+                Answer clearly in Thai language.
+                """
+                response_text = get_ai_response(api_key, prompt)
+                st.markdown("### 📝 รายงานการวิเคราะห์ข้ามสิ่งมีชีวิตจาก AI")
+                st.info(response_text)
+
+        # 2. Interactive Charts
         st.markdown("---")
         st.markdown("#### ความสัมพันธ์: ขนาดจีโนม vs Junk DNA (Interactive)")
         st.caption("ℹ️ เอาเมาส์ชี้ที่จุดเพื่อดูชื่อสิ่งมีชีวิต / หมุนลูกกลิ้งเพื่อซูม")
