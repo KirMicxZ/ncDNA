@@ -126,7 +126,7 @@ with st.sidebar:
     # AI Settings Section
     st.markdown("---")
     st.subheader("AI Configuration")
-    api_key = st.text_input("Google API Key", type="password", help="ใส่ API Key จาก Google AI Studio เพื่อเปิดใช้งานฟีเจอร์วิเคราะห์อัตโนมัติ")
+    api_key = st.text_input("Google API Key", type="password", help="ใส่ API Key จาก Google AI Studio เพื่อเปิดใช้งานฟีเจอร์วิเคราะห์ AI")
     
     st.markdown("---")
     st.subheader("📂 อัปโหลดไฟล์")
@@ -208,7 +208,7 @@ else:
         
         with ai_col1:
             st.markdown("สอบถาม AI เกี่ยวกับจีโนมนี้")
-            user_question = st.text_input("พิมพ์คำถาม (หรือเว้นว่างเพื่อขอสรุปผล)", placeholder="เช่น สิ่งมีชีวิตนี้ทนความร้อนได้หรือไม่?")
+            user_question = st.text_input("พิมพ์คำถาม (หรือเว้นว่างเพื่อขอสรุปผล)", placeholder="เช่น สิ่งมีชีวิตนี้มีลักษณะอย่างไร?")
             analyze_btn = st.button("Start Analysis")
         
         with ai_col2:
@@ -224,7 +224,7 @@ else:
                 if user_question:
                     prompt = f"{context}\n\nUser Question: {user_question}\nAnswer in Thai language clearly."
                 else:
-                    prompt = f"{context}\n\nPlease provide a biological summary and analysis based on the GC content and Junk DNA percentage. What does this imply about the organism's complexity or environment? Answer in Thai language."
+                    prompt = f"{context}\n\nPlease provide a biological summary and analysis based on the GC content and Junk DNA percentage. What does this imply about the organism's complexity or evolutionary characteristics? Answer in Thai."
                 
                 response_text = get_ai_response(api_key, prompt)
                 st.markdown(response_text)
@@ -364,7 +364,7 @@ else:
         # 2. Interactive Charts
         st.markdown("---")
         st.markdown("#### ความสัมพันธ์: ขนาดจีโนม vs Junk DNA (Interactive)")
-        st.caption("ℹ️ เอาเมาส์ชี้ที่จุดเพื่อดูชื่อสิ่งมีชีวิต / หมุนลูกกลิ้งเพื่อซูมเข้า-ออก")
+        st.caption("ℹ️ เอาเมาส์ชี้ที่จุดเพื่อดูชื่อสิ่งมีชีวิต / หมุนลูกกลิ้งเพื่อซูม")
         
         # Interactive Scatter Plot using Plotly
         fig = px.scatter(
