@@ -6,7 +6,6 @@ import pandas as pd
 import io
 import plotly.express as px
 import re
-import google.generativeai as genai # เพิ่ม Library สำหรับ AI
 
 # ============================================
 # 1. Page Configuration & UI Setup
@@ -102,31 +101,12 @@ def process_genbank(file_content, filename):
         "gc_total": calculate_gc(seq)
     }, None
 
-# --- AI Helper Function ---
-def get_ai_response(api_key, prompt):
-    """Connects to Gemini API to get analysis."""
-    if not api_key:
-        return "กรุณาระบุ Google API Key ในแถบเมนูด้านซ้ายเพื่อใช้งาน AI"
-    try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        with st.spinner('AI กำลังวิเคราะห์ข้อมูล...'):
-            response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"เกิดข้อผิดพลาดในการเชื่อมต่อ AI: {str(e)}"
-
 # ============================================
 # 3. Sidebar: Inputs & Instructions
 # ============================================
 with st.sidebar:
     st.title("Genome Analyzer")
     st.markdown("เครื่องมือวิเคราะห์โครงสร้างจีโนม")
-    
-    # AI Settings Section
-    st.markdown("---")
-    st.subheader("AI Configuration")
-    api_key = st.text_input("Google API Key", type="password", help="ใส่ API Key จาก Google AI Studio เพื่อเปิดใช้งานฟีเจอร์วิเคราะห์ AI")
     
     st.markdown("---")
     st.subheader("📂 อัปโหลดไฟล์")
@@ -140,9 +120,8 @@ with st.sidebar:
     with st.expander("วิธีการใช้งาน"):
         st.markdown("""
         1. **เตรียมไฟล์:** ไฟล์จีโนมสกุล `.gbff`
-        2. **API Key:** ใส่ Google API Key หากต้องการคำแนะนำจาก AI
-        3. **โหมดไฟล์เดียว:** แสดงกราฟเชิงลึก, Heatmap และ AI Analysis
-        4. **โหมดเปรียบเทียบ:** ดูตาราง Ranking และให้ AI สรุปแนวโน้ม
+        2. **โหมดไฟล์เดียว:** แสดงกราฟเชิงลึก และสถิติเชิงตัวเลขของจีโนม
+        3. **โหมดเปรียบเทียบ:** ดูตารางตัวเลขเทียบหลายสายพันธุ์ (Ranking) และกราฟ Interactive
         """)
     
     st.caption("Developed for High School Science Project")
@@ -199,37 +178,6 @@ else:
         m2.metric("GC Content", f"{data['gc_total']:.2f}%")
         m3.metric("Coding DNA (CDS)", f"{data['coding_pct']:.2f}%")
         m4.metric("Junk/Non-coding", f"{data['nc_pct']:.2f}%")
-        
-        st.divider()
-
-        # --- AI Analysis Section (New) ---
-        st.subheader("AI Biological Analysis")
-        ai_col1, ai_col2 = st.columns([1, 2])
-        
-        with ai_col1:
-            st.markdown("สอบถาม AI เกี่ยวกับจีโนมนี้")
-            user_question = st.text_input("พิมพ์คำถาม (หรือเว้นว่างเพื่อขอสรุปผล)", placeholder="เช่น สิ่งมีชีวิตนี้มีลักษณะอย่างไร?")
-            analyze_btn = st.button("Start Analysis")
-        
-        with ai_col2:
-            if analyze_btn:
-                # Prepare context
-                context = f"""
-                You are a Bioinformatics expert. Analyze this organism:
-                Name: {data['name']}
-                Genome Length: {data['len']} bp
-                GC Content: {data['gc_total']:.2f}%
-                Non-coding DNA: {data['nc_pct']:.2f}%
-                """
-                if user_question:
-                    prompt = f"{context}\n\nUser Question: {user_question}\nAnswer in Thai language clearly."
-                else:
-                    prompt = f"{context}\n\nPlease provide a biological summary and analysis based on the GC content and Junk DNA percentage. What does this imply about the organism's complexity or evolutionary characteristics? Answer in Thai."
-                
-                response_text = get_ai_response(api_key, prompt)
-                st.markdown(response_text)
-            else:
-                st.info("กดปุ่ม Start Analysis เพื่อเริ่มการวิเคราะห์ด้วย AI")
         
         st.divider()
 
@@ -341,25 +289,6 @@ else:
         # 1. Summary Table
         st.markdown("#### ตารางสรุปข้อมูล (Summary Table)")
         st.dataframe(df.style.highlight_max(axis=0, color='#1e40af'), use_container_width=True)
-
-        # --- AI Comparative Report (New) ---
-        st.markdown("---")
-        st.subheader("AI Comparative Report")
-        if st.button("Generate Comparative Analysis"):
-            # Prepare data string for AI
-            data_str = df.to_string()
-            prompt = f"""
-            You are a Bioinformatics expert. Analyze this comparative data table of multiple organisms:
-            {data_str}
-            
-            Please provide a comparative analysis.
-            1. Which organism has the highest complexity based on coding DNA?
-            2. Identify any correlation between Genome Size and Non-coding DNA (Junk DNA).
-            3. Comment on the GC content variations.
-            Answer in Thai language.
-            """
-            response_text = get_ai_response(api_key, prompt)
-            st.markdown(response_text)
 
         # 2. Interactive Charts
         st.markdown("---")
