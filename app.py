@@ -295,6 +295,59 @@ else:
                 file_name=f"{c_data['id']}_junk_dna.fasta",
                 mime="text/plain"
             )
+        # ============================================
+        # เพิ่มเติม: ส่วนเปรียบเทียบโครโมโซมภายในสิ่งมีชีวิตเดียวกัน
+        # ============================================
+        if data['total_chromosomes'] > 1:
+            st.markdown("---")
+            st.markdown(f"### 📊 เปรียบเทียบโครโมโซมภายใน {data['name']} (Intra-organism)")
+            st.write("ตารางและกราฟแสดงการเปรียบเทียบค่าสถิติระหว่างโครโมโซมต่างๆ ภายในสิ่งมีชีวิตนี้")
+
+            # 1. เตรียมข้อมูลตาราง
+            chrom_list = []
+            for cid, cinfo in data['chromosomes'].items():
+                chrom_list.append({
+                    "Chromosome": cid,
+                    "Length (bp)": cinfo['len'],
+                    "GC %": cinfo['gc_total'],
+                    "Coding %": cinfo['coding_pct'],
+                    "Non-coding (Junk) %": cinfo['nc_pct']
+                })
+            df_chroms = pd.DataFrame(chrom_list)
+
+            # แสดงตาราง
+            st.dataframe(df_chroms.style.highlight_max(axis=0, color='#1e40af'), use_container_width=True)
+
+            # 2. กราฟเปรียบเทียบโครโมโซม
+            cc1, cc2 = st.columns(2)
+            
+            with cc1:
+                st.markdown("**เปรียบเทียบขนาดโครโมโซม**")
+                # ใช้ Plotly สร้างกราฟแท่งแบบ Interactive
+                fig_c1 = px.bar(
+                    df_chroms, 
+                    x="Chromosome", 
+                    y="Length (bp)", 
+                    color="GC %", 
+                    template="plotly_dark",
+                    color_continuous_scale="Viridis"
+                )
+                st.plotly_chart(fig_c1, use_container_width=True)
+                
+            with cc2:
+                st.markdown("**ความสัมพันธ์: ขนาดโครโมโซม vs Non-coding %**")
+                # ใช้ Plotly สร้าง Scatter Plot
+                fig_c2 = px.scatter(
+                    df_chroms, 
+                    x="Length (bp)", 
+                    y="Non-coding (Junk) %", 
+                    color="GC %", 
+                    size="Length (bp)",
+                    hover_name="Chromosome", 
+                    template="plotly_dark",
+                    color_continuous_scale="Viridis"
+                )
+                st.plotly_chart(fig_c2, use_container_width=True)
 
     # ============================================
     # MODE B: Multi-File (Comparison)
