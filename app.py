@@ -176,7 +176,8 @@ def get_ai_response(api_key, prompt):
         return "⚠️ กรุณาระบุ Google API Key ในแถบเมนูด้านซ้ายเพื่อใช้งานฟีเจอร์ AI"
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # ⚡ เปลี่ยนมาใช้รุ่นปัจจุบันที่ฉลาดและเร็วขึ้น เช่น gemini-2.5-flash หรือ gemini-3.5-flash
+        model = genai.GenerativeModel('gemini-2.5-flash') 
         with st.spinner('AI กำลังวิเคราะห์ข้อมูลชีวสารสนเทศ...'):
             response = model.generate_content(prompt)
         return response.text
