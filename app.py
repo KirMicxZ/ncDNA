@@ -157,6 +157,33 @@ def process_genbank(file_content, filename):
             "total_proteins": len(protein_seqs)
         }
 
+    # --- 🛠️ เพิ่มระบบจัดเรียงลำดับโครโมโซมตามลำดับธรรมชาติ (Natural Sorting) ---
+    def roman_to_int(roman_str):
+        roman_dict = {'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000}
+        res = 0
+        for i in range(len(roman_str)):
+            if i + 1 < len(roman_str) and roman_dict.get(roman_str[i], 0) < roman_dict.get(roman_str[i+1], 0):
+                res -= roman_dict.get(roman_str[i], 0)
+            else:
+                res += roman_dict.get(roman_str[i], 0)
+        return res
+
+    def chrom_key(item):
+        cinfo = item[1]
+        match = re.search(r'chromosome\s+([A-Za-z0-9]+)', cinfo['desc'], re.IGNORECASE)
+        if match:
+            val = match.group(1).upper()
+            if val.isdigit():
+                return (0, int(val), val) # กลุ่มที่ 0: ตัวเลขปกติ (1, 2, 3...)
+            if re.match(r'^M{0,4}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$', val) and val != "":
+                return (0, roman_to_int(val), val) # กลุ่มที่ 0: ตัวเลขโรมัน (I, II, III...)
+            return (1, 0, val) # กลุ่มที่ 1: ข้อความอื่นๆ เช่น X, Y, Z
+        return (2, 0, item[0]) # กลุ่มที่ 2: ออร์แกเนลล์ นอกนิวเคลียส (Mitochondrion / Plasmid) ให้ไปท้ายสุด
+
+    # เรียงลำดับ Dictionary ใหม่ตามคีย์ที่เราคำนวณ
+    chromosomes_data = dict(sorted(chromosomes_data.items(), key=chrom_key))
+    # -----------------------------------------------------------------------
+
     overall_coding_pct = (total_coding_len / total_len) * 100 if total_len > 0 else 0
     
     return {
@@ -176,7 +203,7 @@ def get_ai_response(api_key, prompt):
         return "⚠️ กรุณาระบุ Google API Key ในแถบเมนูด้านซ้ายเพื่อใช้งานฟีเจอร์ AI"
     try:
         genai.configure(api_key=api_key)
-        # ⚡ เปลี่ยนมาใช้รุ่นปัจจุบันที่ฉลาดและเร็วขึ้น เช่น gemini-2.5-flash หรือ gemini-3.5-flash
+        # ใช้โมดูลรุ่นเสถียรปัจจุบัน
         model = genai.GenerativeModel('gemini-2.5-flash') 
         with st.spinner('AI กำลังวิเคราะห์ข้อมูลชีวสารสนเทศ...'):
             response = model.generate_content(prompt)
