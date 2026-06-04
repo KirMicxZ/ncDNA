@@ -8,6 +8,7 @@ import plotly.express as px
 import plotly.graph_objects as go  
 import re
 import google.generativeai as genai  
+import time  # เพิ่ม Library สำหรับการหน่วงเวลา Retry
 
 # ============================================
 # 1. Page Configuration & UI Setup
@@ -41,7 +42,6 @@ if 'ncbi_search_results' not in st.session_state:
 def search_ncbi_genomes(query, email):
     """ฟังก์ชันค้นหาชื่อสิ่งมีชีวิตแบบ Real-time จากฐานข้อมูล Assembly"""
     Entrez.email = email
-    # ดึง ID ที่ตรงกับคำค้นหา (จำกัด 5 รายการเพื่อความรวดเร็ว)
     with Entrez.esearch(db="assembly", term=f"{query}[Organism] OR {query}[All Fields]", retmax=5) as handle:
         record = Entrez.read(handle)
         id_list = record.get("IdList", [])
@@ -49,7 +49,6 @@ def search_ncbi_genomes(query, email):
     if not id_list:
         return []
         
-    # ดึงรายละเอียดของแต่ละ ID มาแสดงผลให้ผู้ใช้เลือก
     results = []
     with Entrez.esummary(db="assembly", id=",".join(id_list)) as handle:
         summaries = Entrez.read(handle)
@@ -60,38 +59,51 @@ def search_ncbi_genomes(query, email):
             org = summary.get('SpeciesName', summary.get('Organism', 'Unknown Organism'))
             name = summary.get('AssemblyName', '')
             if acc:
-                # จัดรูปแบบชื่อที่จะไปโชว์ใน Dropdown
                 results.append({"id": acc, "label": f"{org} ({acc}) - {name[:20]}..."})
     return results
 
-def fetch_ncbi(acc_id, email):
-    """ดึงข้อมูล GenBank จาก NCBI พร้อมรองรับทั้งรหัส Nucleotide และ Assembly"""
+def fetch_ncbi(acc_id, email, max_retries=3):
+    """ดึงข้อมูล GenBank จาก NCBI พร้อมระบบสู้ชีวิต (Auto-Retry) เมื่อเน็ตตัด"""
     Entrez.email = email
     acc_id = acc_id.strip().upper()
     
-    if acc_id.startswith("GCF_") or acc_id.startswith("GCA_"):
-        with Entrez.esearch(db="assembly", term=acc_id) as search_handle:
-            search_rec = Entrez.read(search_handle)
-            if not search_rec["IdList"]:
-                raise Exception(f"ไม่พบข้อมูลสำหรับ Assembly: {acc_id}")
-            assembly_id = search_rec["IdList"][0]
-        
-        with Entrez.elink(dbfrom="assembly", db="nucleotide", id=assembly_id) as link_handle:
-            link_rec = Entrez.read(link_handle)
-            if not link_rec[0].get("LinkSetDb"):
-                raise Exception(f"ไม่พบข้อมูลลำดับเบสที่เชื่อมโยงกับ Assembly: {acc_id}")
-            
-            nucl_ids = [link["Id"] for link in link_rec[0]["LinkSetDb"][0]["Link"]]
-            
-            if len(nucl_ids) > 50:
-                raise Exception(f"จีโนมนี้ประกอบด้วยชิ้นส่วนถึง {len(nucl_ids)} ชิ้น แนะนำให้ดาวน์โหลดไฟล์ .gbff จากเว็บ NCBI มาอัปโหลดเองครับ")
-            
-            id_string = ",".join(nucl_ids)
-            with Entrez.efetch(db="nucleotide", id=id_string, rettype="gbwithparts", retmode="text") as fetch_handle:
-                return fetch_handle.read()
-    else:
-        with Entrez.efetch(db="nucleotide", id=acc_id, rettype="gbwithparts", retmode="text") as handle:
-            return handle.read()
+    # วนลูปพยายามดาวน์โหลดตามจำนวน max_retries
+    for attempt in range(max_retries):
+        try:
+            if acc_id.startswith("GCF_") or acc_id.startswith("GCA_"):
+                with Entrez.esearch(db="assembly", term=acc_id) as search_handle:
+                    search_rec = Entrez.read(search_handle)
+                    if not search_rec["IdList"]:
+                        raise Exception(f"ไม่พบข้อมูลสำหรับ Assembly: {acc_id}")
+                    assembly_id = search_rec["IdList"][0]
+                
+                with Entrez.elink(dbfrom="assembly", db="nucleotide", id=assembly_id) as link_handle:
+                    link_rec = Entrez.read(link_handle)
+                    if not link_rec[0].get("LinkSetDb"):
+                        raise Exception(f"ไม่พบข้อมูลลำดับเบสที่เชื่อมโยงกับ Assembly: {acc_id}")
+                    
+                    nucl_ids = [link["Id"] for link in link_rec[0]["LinkSetDb"][0]["Link"]]
+                    
+                    if len(nucl_ids) > 80:
+                        raise Exception(f"จีโนมนี้ประกอบด้วยชิ้นส่วนถึง {len(nucl_ids)} ชิ้น ซึ่งใหญ่เกินไป แนะนำให้ดาวน์โหลดไฟล์ .gbff จากเว็บ NCBI มาอัปโหลดเองครับ")
+                    
+                    id_string = ",".join(nucl_ids)
+                    with Entrez.efetch(db="nucleotide", id=id_string, rettype="gbwithparts", retmode="text") as fetch_handle:
+                        return fetch_handle.read()
+            else:
+                with Entrez.efetch(db="nucleotide", id=acc_id, rettype="gbwithparts", retmode="text") as handle:
+                    return handle.read()
+                    
+        except Exception as e:
+            err_msg = str(e)
+            if attempt < max_retries - 1:
+                time.sleep(2) # หยุดพัก 2 วินาทีแล้วพยายามดึงใหม่
+                continue
+            else:
+                # ถ้าพยายามครบโควตาแล้วยังพัง ให้แจ้งผู้ใช้
+                if "IncompleteRead" in err_msg:
+                    raise Exception("เซิร์ฟเวอร์ NCBI ตัดการเชื่อมต่อกลางคันเนื่องจากไฟล์มีขนาดใหญ่ โปรดลองกดดาวน์โหลดใหม่อีกครั้ง")
+                raise Exception(f"เกิดข้อผิดพลาดในการโหลดข้อมูล: {err_msg}")
 
 @st.cache_data
 def calculate_gc(sequence):
@@ -235,7 +247,6 @@ with st.sidebar:
     st.subheader("🌐 ดึงข้อมูลจาก NCBI")
     ncbi_email = st.text_input("Email (จำเป็นสำหรับ NCBI)", placeholder="email@example.com")
     
-    # แบ่งแท็บการค้นหาออกเป็น 2 รูปแบบ
     tab1, tab2 = st.tabs(["🔍 ค้นหาชื่อ", "📝 ระบุ ID โดยตรง"])
     
     with tab1:
@@ -253,7 +264,6 @@ with st.sidebar:
                     except Exception as e:
                         st.error(f"เกิดข้อผิดพลาด: {e}")
         
-        # แสดงผลลัพธ์การค้นหาในรูปแบบ Dropdown ให้ผู้ใช้เลือก
         if st.session_state.get('ncbi_search_results') is not None:
             res_list = st.session_state['ncbi_search_results']
             if len(res_list) > 0:
@@ -261,7 +271,7 @@ with st.sidebar:
                 selected_acc = st.selectbox("พบข้อมูล โปรดเลือกจีโนม:", options=list(options.keys()), format_func=lambda x: options[x])
                 
                 if st.button("📥 ดาวน์โหลดจีโนมที่เลือก"):
-                    with st.spinner(f"กำลังดาวน์โหลด {selected_acc}..."):
+                    with st.spinner(f"กำลังดาวน์โหลดและประมวลผล {selected_acc} (อาจใช้เวลาสักครู่)..."):
                         try:
                             raw_data = fetch_ncbi(selected_acc, ncbi_email)
                             if not any(item['id'] == selected_acc for item in st.session_state['ncbi_cache']):
@@ -273,7 +283,7 @@ with st.sidebar:
                             st.success(f"ดาวน์โหลด {selected_acc} สำเร็จ!")
                             st.rerun()
                         except Exception as e:
-                            st.error(f"โหลดข้อมูลล้มเหลว: {e}")
+                            st.error(str(e))
             else:
                 st.info("❌ ไม่พบชื่อจีโนมนี้ในฐานข้อมูล NCBI ลองใช้คำอื่นดูครับ")
 
@@ -285,7 +295,7 @@ with st.sidebar:
             if not ncbi_email or not ncbi_id:
                 st.error("กรุณากรอก Email และ RefSeq ID ให้ครบถ้วน")
             else:
-                with st.spinner(f"กำลังดาวน์โหลด {ncbi_id}..."):
+                with st.spinner(f"กำลังดาวน์โหลดและประมวลผล {ncbi_id} (อาจใช้เวลาสักครู่)..."):
                     try:
                         raw_data = fetch_ncbi(ncbi_id.strip(), ncbi_email.strip())
                         if not any(item['id'] == ncbi_id for item in st.session_state['ncbi_cache']):
@@ -297,9 +307,8 @@ with st.sidebar:
                         st.success("ดาวน์โหลดสำเร็จ!")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"เกิดข้อผิดพลาด: {e}")
+                        st.error(str(e))
                     
-    # รายการไฟล์ที่โหลดมาแล้ว
     if st.session_state['ncbi_cache']:
         st.markdown(f"*(มีข้อมูลจาก NCBI จำนวน {len(st.session_state['ncbi_cache'])} รายการ)*")
         if st.button("🗑️ ล้างข้อมูล NCBI"):
