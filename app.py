@@ -54,7 +54,7 @@ def safe_ncbi_call(func, max_retries=5, is_fetch=False, **kwargs):
                     return Entrez.read(handle)
         except Exception as e:
             if attempt < max_retries - 1:
-                time.sleep(3) # พัก 3 วินาทีก่อนลองใหม่
+                time.sleep(3) 
                 continue
             else:
                 err_msg = str(e)
@@ -66,7 +66,6 @@ def search_ncbi_genomes(query, email):
     Entrez.email = email
     search_term = f"({query}[Organism] OR {query}[All Fields]) AND \"latest refseq\"[filter]"
     
-    # ใช้ Safe Wrapper ครอบ esearch และ esummary
     record = safe_ncbi_call(Entrez.esearch, db="assembly", term=search_term, retmax=5)
     id_list = record.get("IdList", [])
         
@@ -102,7 +101,7 @@ def fetch_ncbi(acc_id, email):
         nucl_ids = [link["Id"] for link in link_rec[0]["LinkSetDb"][0]["Link"]]
         
         if len(nucl_ids) > 300:
-            raise Exception(f"จีโนมนี้ประกอบด้วยชิ้นส่วนถึง {len(nucl_ids)} ชิ้น แนะนำให้ดาวน์โหลดไฟล์ .gbff จากเว็บมาอัปโหลดเองครับ")
+            raise Exception(f"ระบบตรวจพบชิ้นส่วนจีโนมจำนวน {len(nucl_ids)} ชิ้น ซึ่งเกินขีดจำกัดการเชื่อมต่อชั่วคราว โปรดดาวน์โหลดไฟล์ .gbff โดยตรงจากเว็บไซต์ NCBI เพื่อทำการวิเคราะห์")
         
         all_data = ""
         batch_size = 5 
@@ -232,56 +231,56 @@ def process_genbank(file_content, filename):
     }, None
 
 def get_ai_response(api_key, prompt):
-    if not api_key: return "⚠️ กรุณาระบุ Google API Key ในแถบเมนูด้านซ้ายเพื่อใช้งานฟีเจอร์ AI"
+    if not api_key: return "⚠️ โปรดระบุ Google API Key ในแถบเมนูด้านซ้ายเพื่อใช้งานระบบวิเคราะห์"
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-2.5-flash') 
-        with st.spinner('AI กำลังวิเคราะห์ข้อมูลชีวสารสนเทศ...'):
+        with st.spinner('ระบบกำลังประมวลผลการวิเคราะห์ทางชีวสารสนเทศ...'):
             response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        return f"เกิดข้อผิดพลาดในการเชื่อมต่อ AI: {str(e)}"
+        return f"เกิดข้อผิดพลาดในการเชื่อมต่อระบบ AI: {str(e)}"
 
 # ============================================
 # 3. Sidebar: Inputs & Instructions
 # ============================================
 with st.sidebar:
     st.title("Genome Analyzer")
-    st.markdown("เครื่องมือวิเคราะห์โครงสร้างจีโนม")
+    st.markdown("ระบบวิเคราะห์และประมวลผลข้อมูลจีโนม")
     
     st.markdown("---")
-    st.subheader("🤖 AI Configuration")
-    api_key = st.text_input("Google API Key", type="password", help="ใส่ API Key จาก Google AI Studio เพื่อวิเคราะห์ด้วย AI")
+    st.subheader("⚙️ การตั้งค่าปัญญาประดิษฐ์ (AI)")
+    api_key = st.text_input("Google API Key", type="password", help="โปรดระบุ API Key จาก Google AI Studio เพื่อเปิดใช้งานระบบวิเคราะห์เชิงลึก")
     
     st.markdown("---")
-    st.subheader("🌐 ดึงข้อมูลจาก NCBI")
-    ncbi_email = st.text_input("Email (จำเป็นสำหรับ NCBI)", placeholder="email@example.com")
+    st.subheader("🌐 ระบบสืบค้นฐานข้อมูล NCBI")
+    ncbi_email = st.text_input("อีเมล (บังคับสำหรับการเข้าถึง NCBI)", placeholder="email@example.com")
     
-    tab1, tab2 = st.tabs(["🔍 ค้นหาชื่อ", "📝 ระบุ ID โดยตรง"])
+    tab1, tab2 = st.tabs(["🔍 สืบค้นด้วยชื่อ", "📝 สืบค้นด้วยรหัสอ้างอิง"])
     
     with tab1:
-        st.write("ค้นหาชื่อสิ่งมีชีวิตในฐานข้อมูล Assembly")
-        search_query = st.text_input("พิมพ์ชื่อ (เช่น Yeast, E. coli)", key="search_q")
+        st.write("สืบค้นข้อมูลจีโนมจากฐานข้อมูล Assembly")
+        search_query = st.text_input("ระบุชื่อวิทยาศาสตร์ (ตัวอย่าง: Yeast, E. coli)", key="search_q")
         
-        if st.button("🔍 ค้นหาข้อมูล"):
+        if st.button("🔍 ดำเนินการสืบค้น"):
             if not ncbi_email:
-                st.warning("⚠️ กรุณากรอก Email ด้านบนก่อนทำการค้นหาครับ")
+                st.warning("⚠️ โปรดระบุอีเมลก่อนทำการสืบค้นข้อมูล")
             elif search_query:
-                with st.spinner(f"กำลังค้นหา '{search_query}'..."):
+                with st.spinner(f"กำลังสืบค้นข้อมูล '{search_query}'..."):
                     try:
                         results = search_ncbi_genomes(search_query, ncbi_email)
                         st.session_state['ncbi_search_results'] = results
                     except Exception as e:
-                        st.error(f"เกิดข้อผิดพลาด: {e}")
+                        st.error(f"เกิดข้อผิดพลาดในการสืบค้น: {e}")
         
         if st.session_state.get('ncbi_search_results') is not None:
             res_list = st.session_state['ncbi_search_results']
             if len(res_list) > 0:
                 options = {r['id']: r['label'] for r in res_list}
-                selected_acc = st.selectbox("พบข้อมูล โปรดเลือกจีโนม:", options=list(options.keys()), format_func=lambda x: options[x])
+                selected_acc = st.selectbox("ผลการค้นหา โปรดระบุจีโนมที่ต้องการ:", options=list(options.keys()), format_func=lambda x: options[x])
                 
-                if st.button("📥 ดาวน์โหลดจีโนมที่เลือก"):
-                    with st.spinner(f"กำลังดาวน์โหลดและประมวลผล {selected_acc} (ทยอยโหลดแบบปลอดภัย อาจใช้เวลาสักครู่)..."):
+                if st.button("📥 นำเข้าข้อมูลจีโนม"):
+                    with st.spinner(f"กำลังนำเข้าและประมวลผลข้อมูลรหัส {selected_acc} (อาจใช้เวลาสักครู่เนื่องจากมาตรการความปลอดภัยของเซิร์ฟเวอร์)..."):
                         try:
                             raw_data = fetch_ncbi(selected_acc, ncbi_email)
                             if not any(item['id'] == selected_acc for item in st.session_state['ncbi_cache']):
@@ -290,22 +289,22 @@ with st.sidebar:
                                     "filename": f"NCBI_{selected_acc}.gbff",
                                     "content": raw_data
                                 })
-                            st.success(f"ดาวน์โหลด {selected_acc} สำเร็จ!")
+                            st.success(f"นำเข้าข้อมูล {selected_acc} สำเร็จ!")
                             st.rerun()
                         except Exception as e:
                             st.error(str(e))
             else:
-                st.info("❌ ไม่พบชื่อจีโนมนี้ในฐานข้อมูล NCBI ลองใช้คำอื่นดูครับ")
+                st.info("❌ ไม่พบข้อมูลจีโนมดังกล่าวในฐานข้อมูล โปรดตรวจสอบการสะกดชื่ออีกครั้ง")
 
     with tab2:
-        st.write("ดึงข้อมูลหากทราบรหัส RefSeq / GenBank อยู่แล้ว")
-        ncbi_id = st.text_input("RefSeq ID", placeholder="เช่น NC_000913 หรือ GCF_000146045.2", key="manual_id")
+        st.write("สืบค้นข้อมูลผ่านรหัสอ้างอิง RefSeq หรือ GenBank")
+        ncbi_id = st.text_input("รหัสอ้างอิง (Accession ID)", placeholder="ตัวอย่าง: NC_000913 หรือ GCF_000146045.2", key="manual_id")
         
-        if st.button("📥 ดาวน์โหลดด้วย ID"):
+        if st.button("📥 นำเข้าข้อมูลด้วยรหัสอ้างอิง"):
             if not ncbi_email or not ncbi_id:
-                st.error("กรุณากรอก Email และ RefSeq ID ให้ครบถ้วน")
+                st.error("โปรดระบุอีเมลและรหัสอ้างอิงให้ครบถ้วน")
             else:
-                with st.spinner(f"กำลังดาวน์โหลดและประมวลผล {ncbi_id} (ทยอยโหลดแบบปลอดภัย อาจใช้เวลาสักครู่)..."):
+                with st.spinner(f"กำลังนำเข้าและประมวลผลข้อมูลรหัส {ncbi_id} (อาจใช้เวลาสักครู่)..."):
                     try:
                         raw_data = fetch_ncbi(ncbi_id.strip(), ncbi_email.strip())
                         if not any(item['id'] == ncbi_id for item in st.session_state['ncbi_cache']):
@@ -314,33 +313,33 @@ with st.sidebar:
                                 "filename": f"NCBI_{ncbi_id.strip()}.gbff",
                                 "content": raw_data
                             })
-                        st.success("ดาวน์โหลดสำเร็จ!")
+                        st.success("นำเข้าข้อมูลสำเร็จ!")
                         st.rerun()
                     except Exception as e:
                         st.error(str(e))
                     
     if st.session_state['ncbi_cache']:
-        st.markdown(f"*(มีข้อมูลจาก NCBI จำนวน {len(st.session_state['ncbi_cache'])} รายการ)*")
-        if st.button("🗑️ ล้างข้อมูล NCBI"):
+        st.markdown(f"*(ข้อมูลปัจจุบันจาก NCBI: จำนวน {len(st.session_state['ncbi_cache'])} รายการ)*")
+        if st.button("🗑️ ล้างข้อมูลในระบบ"):
             st.session_state['ncbi_cache'] = []
             st.session_state['ncbi_search_results'] = None
             st.rerun()
             
     st.markdown("---")
-    st.subheader("📂 อัปโหลดไฟล์")
+    st.subheader("📂 นำเข้าไฟล์ข้อมูล (Upload)")
     uploaded_files = st.file_uploader(
-        "รองรับไฟล์ .gbff", 
+        "รองรับเฉพาะไฟล์รูปแบบ .gbff", 
         type=["gbff"], 
         accept_multiple_files=True
     )
 
     st.markdown("---")
-    with st.expander("วิธีการใช้งาน"):
+    with st.expander("📖 คู่มือการใช้งานระบบ"):
         st.markdown("""
-        1. **เตรียมไฟล์:** โหลดไฟล์ `.gbff` หรือค้นหา/ดึงจาก NCBI แบบออนไลน์
-        2. **ป้อน API Key:** หากต้องการใช้ระบบ AI แนะนำให้ระบุคีย์ที่แถบด้านซ้าย
-        3. **โหมดไฟล์เดียว:** คลิกเลือกโครโมโซมเพื่อดูรายละเอียดและสั่ง AI วิเคราะห์โครโมโซมนั้น ๆ
-        4. **โหมดเปรียบเทียบ:** นำเข้าหลายไฟล์เพื่อวิเคราะห์เชิงวิวัฒนาการ
+        1. **การนำเข้าข้อมูล:** อัปโหลดไฟล์รูปแบบ `.gbff` หรือสืบค้นจากฐานข้อมูล NCBI ทางแถบเมนูด้านซ้าย
+        2. **การตั้งค่าความสามารถขั้นสูง:** ระบุ API Key เพื่อเปิดใช้งานระบบผู้ช่วยวิเคราะห์ทางชีววิทยาด้วย AI
+        3. **โหมดวิเคราะห์เดี่ยว:** เลือกโครโมโซมบนแผนภาพเพื่อประเมินค่าทางสถิติและวิเคราะห์ข้อมูลเชิงลึกเฉพาะส่วน
+        4. **โหมดเปรียบเทียบ:** นำเข้าข้อมูลสิ่งมีชีวิตหลายชนิดเพื่อวิเคราะห์ความสัมพันธ์และสร้างรายงานเปรียบเทียบ
         """)
 
 # ============================================
@@ -352,24 +351,24 @@ has_files = bool(uploaded_files)
 has_ncbi = bool(st.session_state['ncbi_cache'])
 
 if not has_files and not has_ncbi:
-    st.info("⬅️ กรุณาอัปโหลดไฟล์ .gbff หรือ ค้นหาข้อมูลจาก NCBI ที่แถบเมนูด้านซ้ายเพื่อเริ่มต้น")
+    st.info("⬅️ โปรดนำเข้าไฟล์ `.gbff` หรือสืบค้นข้อมูลจากระบบ NCBI ทางเมนูด้านซ้ายเพื่อเริ่มต้นการวิเคราะห์")
     
     cols = st.columns(3)
     with cols[0]:
-        st.markdown("### Deep Analysis")
-        st.write("วิเคราะห์โครงสร้างยีนและ Junk DNA เชิงลึก")
+        st.markdown("### การวิเคราะห์เชิงลึก")
+        st.write("วิเคราะห์โครงสร้างยีนและบริเวณ Non-coding DNA อย่างละเอียด")
     with cols[1]:
-        st.markdown("### Comparison")
-        st.write("เปรียบเทียบสิ่งมีชีวิตหลายสายพันธุ์ (Interactive)")
+        st.markdown("### การเปรียบเทียบข้อมูล")
+        st.write("ประเมินเปรียบเทียบข้อมูลทางสถิติระหว่างสายพันธุ์")
     with cols[2]:
-        st.markdown("### Data Export & AI Assistant")
-        st.write("ส่งออกข้อมูล Junk DNA และใช้ AI สรุปเชิงชีววิทยา")
+        st.markdown("### ส่งออกข้อมูลและผู้ช่วย AI")
+        st.write("ส่งออกข้อมูลลำดับเบสและสร้างรายงานวิเคราะห์ด้วยปัญญาประดิษฐ์")
 
 else:
     results = []
     errors = []
     
-    with st.spinner('กำลังประมวลผล DNA...'):
+    with st.spinner('ระบบกำลังประมวลผลข้อมูลจีโนม...'):
         if has_files:
             for uploaded_file in uploaded_files:
                 content = uploaded_file.getvalue().decode("utf-8")
@@ -391,18 +390,16 @@ else:
     # ============================================
     if len(results) == 1:
         data = results[0]
-        st.markdown(f"### ผลการวิเคราะห์: {data['name']}")
-        st.caption(f"File: {data['filename']} | จำนวนโครโมโซมที่พบ: {data['total_chromosomes']} โครโมโซม")
+        st.markdown(f"### รายงานผลการวิเคราะห์จีโนม: {data['name']}")
+        st.caption(f"แฟ้มข้อมูล: {data['filename']} | ข้อมูลโครโมโซมที่ตรวจพบ: {data['total_chromosomes']} หน่วย")
         
-        # 💡 [ส่วนที่เพิ่มใหม่] แผงข้อมูลสรุปภาพรวมทั้งจีโนม (Whole Genome Summary)
-        st.markdown("#### 🌍 สรุปภาพรวมทั้งจีโนม (Whole Genome Summary)")
+        st.markdown("#### 🌍 สรุปภาพรวมระดับจีโนม (Whole Genome Summary)")
         wg1, wg2, wg3, wg4 = st.columns(4)
-        wg1.metric("Total Genome Size", f"{data['len']:,} bp")
-        wg2.metric("Total GC Content", f"{data['gc_total']:.2f}%")
-        wg3.metric("Overall Coding DNA", f"{data['coding_pct']:.2f}%")
-        wg4.metric("Overall Junk DNA", f"{data['nc_pct']:.2f}%")
+        wg1.metric("ขนาดจีโนมรวม (Total Size)", f"{data['len']:,} bp")
+        wg2.metric("ปริมาณ GC (Total GC)", f"{data['gc_total']:.2f}%")
+        wg3.metric("รหัสสร้างโปรตีน (Overall CDS)", f"{data['coding_pct']:.2f}%")
+        wg4.metric("Non-coding DNA", f"{data['nc_pct']:.2f}%")
         st.divider()
-        # ----------------------------------------------------
         
         chrom_ids = list(data['chromosomes'].keys())
         
@@ -410,8 +407,8 @@ else:
             st.session_state.selected_chrom_id = chrom_ids[0]
             
         if len(chrom_ids) > 1:
-            st.markdown("### 🧬 แผนผังโครโมโซม (Chromosome Map)")
-            st.write("👆 **คลิกจิ้มเลือกที่แท่งโครโมโซม** ในแผนผังด้านล่างนี้ เพื่อสลับดูสถิติและข้อมูลเชิงลึกได้ทันที")
+            st.markdown("### 🧬 แผนผังโครโมโซม (Chromosome Mapping)")
+            st.write("👆 **โปรดคลิกเลือกแท่งโครโมโซมบนแผนผังด้านล่าง** เพื่อเรียกดูข้อมูลทางสถิติและผลการวิเคราะห์เชิงลึกเฉพาะส่วน")
 
             c_names = []
             c_lengths = []
@@ -477,19 +474,19 @@ else:
         c_data = data['chromosomes'][selected_chrom_id]
         
         # 1. Key Metrics 
-        st.markdown(f"#### 📊 ข้อมูลเชิงลึกของ: {selected_chrom_id} ({c_data['desc']})")
+        st.markdown(f"#### 📊 สรุปข้อมูลทางสถิติของส่วน: {selected_chrom_id} ({c_data['desc']})")
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Chromosome Length", f"{c_data['len']:,} bp")
-        m2.metric("GC Content", f"{c_data['gc_total']:.2f}%")
-        m3.metric("Coding DNA (CDS)", f"{c_data['coding_pct']:.2f}%")
-        m4.metric("Junk/Non-coding", f"{c_data['nc_pct']:.2f}%")
+        m1.metric("ความยาวลำดับเบส", f"{c_data['len']:,} bp")
+        m2.metric("ปริมาณ GC (GC Content)", f"{c_data['gc_total']:.2f}%")
+        m3.metric("รหัสสร้างโปรตีน (CDS)", f"{c_data['coding_pct']:.2f}%")
+        m4.metric("ส่วนที่ไม่ได้สร้างโปรตีน", f"{c_data['nc_pct']:.2f}%")
         
         st.divider()
 
         # 2. Charts Row 1
         c1, c2 = st.columns(2)
         with c1:
-            st.markdown("**1. การกระจายตัวของ Intergenic Length**")
+            st.markdown("**1. การกระจายตัวของความยาวบริเวณ Intergenic (Length Distribution)**")
             lengths = [len(i) for i in c_data['intergenic_seqs'] if len(i) > 0]
             if lengths:
                 fig3, ax = plt.subplots(figsize=(6, 4))
@@ -499,29 +496,29 @@ else:
                 ax.grid(axis='y', alpha=0.2, linestyle='--')
                 st.pyplot(fig3)
             else:
-                st.warning("ไม่พบ Intergenic Regions")
+                st.warning("ระบบไม่พบข้อมูลบริเวณ Intergenic ในชุดข้อมูลนี้")
 
         with c2:
-            st.markdown("**2. GC-Content Comparison**")
+            st.markdown("**2. เปรียบเทียบปริมาณ GC (GC Content Comparison)**")
             gc_coding = [calculate_gc(c_data['seq'][s:e]) for s, e in c_data['cds_regions']]
             gc_nc = [calculate_gc(s) for s in c_data['intergenic_seqs'] if len(s) > 0]
             
             if gc_coding and gc_nc:
                 fig2, ax2 = plt.subplots(figsize=(6, 4))
-                bp = ax2.boxplot([gc_coding, gc_nc], labels=["Coding", "Non-coding"], patch_artist=True)
+                bp = ax2.boxplot([gc_coding, gc_nc], labels=["Coding Region", "Non-coding Region"], patch_artist=True)
                 for box in bp['boxes']:
                     box.set(color='#34d399', linewidth=2)
                     box.set(facecolor='#065f46')
                 for median in bp['medians']:
                     median.set(color='white', linewidth=2)
-                ax2.set_ylabel("GC %")
+                ax2.set_ylabel("GC Percentage (%)")
                 ax2.grid(axis='y', alpha=0.2, linestyle='--')
                 st.pyplot(fig2)
 
         st.divider()
         
         # 3. Sliding Window
-        st.markdown("**3. GC% Variation (Sliding Window)**")
+        st.markdown("**3. ความแปรปรวนของปริมาณ GC ตามแนวสายโครโมโซม (Sliding Window)**")
         window = 1000
         seq = c_data['seq']
         pos = []
@@ -537,7 +534,7 @@ else:
 
         # --- 🧬 ส่วนเสริม: สัดส่วนกรดอะมิโนบนโครโมโซม ---
         st.divider()
-        st.markdown(f"**4. สัดส่วนการกระจายตัวของกรดอะมิโน (Amino Acid Composition) - พบโปรตีนทั้งหมด {c_data['total_proteins']:,} ชนิด**")
+        st.markdown(f"**4. ความถี่และสัดส่วนการพบกรดอะมิโน (Amino Acid Composition) - ตรวจพบรหัสโปรตีนจำนวน {c_data['total_proteins']:,} ลำดับ**")
         if c_data.get('aa_dist'):
             df_aa = pd.DataFrame(list(c_data['aa_dist'].items()), columns=['Amino Acid', 'Count'])
             
@@ -556,31 +553,31 @@ else:
             fig_aa = px.bar(
                 df_aa, x='Amino Acid', y='Count', color='Count',
                 template='plotly_dark', color_continuous_scale="Blugrn",
-                labels={"Count": "จำนวนครั้งที่พบ"}
+                labels={"Count": "ความถี่ที่พบ (หน่วย)"}
             )
             fig_aa.update_layout(margin=dict(l=0, r=0, t=20, b=0), height=380)
             st.plotly_chart(fig_aa, use_container_width=True, config={'displayModeBar': False})
         else:
-            st.info("⚠️ ไม่พบลำดับข้อมูลกรดอะมิโน (Translation Feature) ในไฟล์นี้")
+            st.info("⚠️ ระบบไม่พบข้อมูลการแปลรหัสโปรตีน (Translation Feature) ในข้อมูลส่วนนี้")
 
         # --- 🤖 ส่วนเสริม: ระบบวิเคราะห์และถามตอบด้วย AI รายโครโมโซม ---
         st.divider()
-        st.subheader("🧬 AI Biological Assistant")
+        st.subheader("🧬 ระบบผู้ช่วยวิเคราะห์ทางชีววิทยาด้วยปัญญาประดิษฐ์ (AI Assistant)")
         ai_col1, ai_col2 = st.columns([1, 2])
         
         with ai_col1:
-            st.markdown("ระบบจะส่งสถิติของทุกโครโมโซมให้ AI เห็นภาพรวม แต่สั่งให้ AI **โฟกัสคำตอบเฉพาะโครโมโซมที่คุณเลือก** หรือตอบคำถามเฉพาะเจาะจงด้านล่าง")
-            user_question = st.text_input("💡 ถามคำถามชีววิทยาเกี่ยวกับโครโมโซมนี้", placeholder="เช่น ทำไมโครโมโซมนี้ถึงมีกรดอะมิโน Serine มากเป็นพิเศษ?")
-            run_ai = st.button("✨ เริ่มการวิเคราะห์ด้วย AI")
+            st.markdown("ระบบจะประมวลผลสถิติภาพรวมของจีโนมและวิเคราะห์เปรียบเทียบเจาะจงเฉพาะส่วนที่ท่านเลือก ท่านสามารถระบุคำถามเพิ่มเติมเพื่อการวิเคราะห์เฉพาะทางได้")
+            user_question = st.text_input("💡 ระบุคำถามหรือสมมติฐานทางชีววิทยา:", placeholder="เช่น ปริมาณกรดอะมิโน Serine ที่สูงขึ้นมีความหมายทางวิวัฒนาการอย่างไร?")
+            run_ai = st.button("✨ ดำเนินการวิเคราะห์ด้วย AI")
             
         with ai_col2:
             if run_ai:
                 if not api_key:
-                    st.error("❌ กรุณากรอก Google API Key ที่แถบเมนูด้านซ้ายก่อนกดปุ่มวิเคราะห์ครับ")
+                    st.error("❌ โปรดระบุ Google API Key ในแถบเมนูด้านซ้ายเพื่อเริ่มต้นกระบวนการวิเคราะห์")
                 else:
                     all_chroms_summary = ""
                     for cid, cinfo in data['chromosomes'].items():
-                        all_chroms_summary += f"- โครโมโซม {cid}: ความยาว={cinfo['len']:,} bp, GC={cinfo['gc_total']:.2f}%, Non-coding={cinfo['nc_pct']:.2f}%, จำนวนโปรตีน={cinfo['total_proteins']:,} ชนิด\n"
+                        all_chroms_summary += f"- รหัส {cid}: ความยาว={cinfo['len']:,} bp, GC={cinfo['gc_total']:.2f}%, Non-coding={cinfo['nc_pct']:.2f}%, จำนวนโปรตีน={cinfo['total_proteins']:,} ชนิด\n"
                     
                     prompt = f"""
                     You are an expert Bioinformatics AI Assistant. Analyze the genomic data of this organism.
@@ -591,7 +588,7 @@ else:
                     Here is the statistical summary of ALL chromosomes for your baseline comparison:
                     {all_chroms_summary}
                     
-                    [TARGET FOCUS - โครโมโซมที่ผู้ใช้เลือกตรวจสอบอยู่ตอนนี้]
+                    [TARGET FOCUS]
                     Selected Chromosome ID: {selected_chrom_id}
                     Description: {c_data['desc']}
                     Length: {c_data['len']:,} bp
@@ -608,37 +605,37 @@ else:
                     1. Focus your answer primarily on the [TARGET FOCUS] chromosome and directly answer the user's question or analyze it deeply.
                     2. Use the [GLOBAL GENOME CONTEXT] data only to make meaningful biological comparisons.
                     3. Do not generalize the answer to the whole genome unless making a comparison. Keep the focus tight.
-                    4. Answer in scientifically rigorous, clear, and beautiful Thai language.
+                    4. Answer in scientifically rigorous, clear, formal, and academic Thai language suitable for a research presentation.
                     """
                     
                     response_text = get_ai_response(api_key, prompt)
-                    st.markdown("### 📝 สรุปและคำแนะนำจาก AI")
+                    st.markdown("### 📝 รายงานและผลการวิเคราะห์จาก AI")
                     st.info(response_text)
             else:
-                st.info("💡 ระบุ API Key ทางซ้ายมือ แล้วกดปุ่มวิเคราะห์เพื่อรับข้อมูลเชิงลึกจาก AI")
+                st.info("💡 เมื่อระบุ API Key แล้ว โปรดกดปุ่มเพื่อรับรายงานเชิงวิชาการ")
 
         # 5. Advanced Analysis Section
         st.markdown("---")
-        st.subheader("Advanced Analysis: Repeats & Data")
+        st.subheader("การวิเคราะห์ขั้นสูง: รูปแบบซ้ำและข้อมูลดิบ (Advanced Analysis)")
         
         ac1, ac2 = st.columns(2)
         with ac1:
-            st.markdown("#### Motif Search in Junk DNA")
-            st.caption("ค้นหาจำนวนจุดที่พบรหัสพันธุกรรมซ้ำๆ ในส่วน Non-coding")
+            st.markdown("#### การค้นหาลำดับเบสซ้ำ (Motif Search)")
+            st.caption("สืบค้นรูปแบบลำดับเบสซ้ำในบริเวณ Non-coding DNA")
             
             sc1, sc2 = st.columns(2)
-            with sc1: motif_input = st.text_input("Pattern (e.g. AT, G)", value="AT")
-            with sc2: threshold_input = st.number_input("Min Repeats", min_value=3, value=5)
+            with sc1: motif_input = st.text_input("รูปแบบลำดับเบส (ตัวอย่าง: AT, G)", value="AT")
+            with sc2: threshold_input = st.number_input("จำนวนรอบการทำซ้ำขั้นต่ำ", min_value=3, value=5)
             
             total_repeats = 0
             for s in c_data['intergenic_seqs']:
                 total_repeats += find_simple_repeats(s, motif_input, threshold_input)
             
-            st.metric(f"Found '{motif_input}' repeated >{threshold_input} times", f"{total_repeats:,} spots")
+            st.metric(f"จำนวนตำแหน่งที่พบรูปแบบ '{motif_input}' ซ้ำมากกว่า {threshold_input} ครั้ง", f"{total_repeats:,} ตำแหน่ง")
 
         with ac2:
-            st.markdown("#### Export Data")
-            st.caption("ดาวน์โหลดลำดับเบสส่วน Junk DNA (FASTA) เพื่อนำไปวิเคราะห์ต่อ")
+            st.markdown("#### การส่งออกข้อมูลดิบ (Data Export)")
+            st.caption("ดึงข้อมูลลำดับเบสส่วน Non-coding DNA เพื่อนำไปประมวลผลต่อ (รูปแบบ FASTA)")
             
             fasta_str = ""
             for i, seq_segment in enumerate(c_data['intergenic_seqs']):
@@ -646,7 +643,7 @@ else:
                     fasta_str += f">Intergenic_{i+1}_{c_data['id']}\n{seq_segment}\n"
             
             st.download_button(
-                label="Download Non-coding Sequences (.fasta)",
+                label="📥 ดาวน์โหลดข้อมูล Non-coding Sequences (.fasta)",
                 data=fasta_str,
                 file_name=f"{c_data['id']}_junk_dna.fasta",
                 mime="text/plain"
@@ -654,35 +651,35 @@ else:
             
         if data['total_chromosomes'] > 1:
             st.markdown("---")
-            st.markdown(f"### 📊 เปรียบเทียบโครโมโซมภายใน {data['name']} (Intra-organism)")
-            st.write("ตารางและกราฟแสดงการเปรียบเทียบค่าสถิติระหว่างโครโมโซมต่างๆ ภายในสิ่งมีชีวิตนี้")
+            st.markdown(f"### 📊 การประเมินความแตกต่างระหว่างโครโมโซม (Intra-organism Comparison)")
+            st.write("ตารางและแผนภาพแสดงการเปรียบเทียบค่าทางสถิติระหว่างโครโมโซมภายในจีโนมเดียวกัน")
 
             chrom_list = []
             for cid, cinfo in data['chromosomes'].items():
                 chrom_list.append({
-                    "Chromosome": cid,
-                    "Length (bp)": cinfo['len'],
-                    "GC %": cinfo['gc_total'],
-                    "Coding %": cinfo['coding_pct'],
-                    "Non-coding (Junk) %": cinfo['nc_pct']
+                    "รหัสอ้างอิง (ID)": cid,
+                    "ความยาว (bp)": cinfo['len'],
+                    "ปริมาณ GC (%)": cinfo['gc_total'],
+                    "สัดส่วนรหัสโปรตีน (%)": cinfo['coding_pct'],
+                    "สัดส่วน Non-coding (%)": cinfo['nc_pct']
                 })
             df_chroms = pd.DataFrame(chrom_list)
             st.dataframe(df_chroms.style.highlight_max(axis=0, color='#1e40af'), use_container_width=True)
 
             cc1, cc2 = st.columns(2)
             with cc1:
-                st.markdown("**เปรียบเทียบขนาดโครโมโซม**")
+                st.markdown("**เปรียบเทียบขนาดของโครโมโซม**")
                 fig_c1 = px.bar(
-                    df_chroms, x="Chromosome", y="Length (bp)", color="GC %", 
+                    df_chroms, x="รหัสอ้างอิง (ID)", y="ความยาว (bp)", color="ปริมาณ GC (%)", 
                     template="plotly_dark", color_continuous_scale="Viridis"
                 )
                 st.plotly_chart(fig_c1, use_container_width=True)
                 
             with cc2:
-                st.markdown("**ความสัมพันธ์: ขนาดโครโมโซม vs Non-coding %**")
+                st.markdown("**ความสัมพันธ์: ขนาดโครโมโซม และ สัดส่วน Non-coding DNA**")
                 fig_c2 = px.scatter(
-                    df_chroms, x="Length (bp)", y="Non-coding (Junk) %", color="GC %", 
-                    size="Length (bp)", hover_name="Chromosome", template="plotly_dark",
+                    df_chroms, x="ความยาว (bp)", y="สัดส่วน Non-coding (%)", color="ปริมาณ GC (%)", 
+                    size="ความยาว (bp)", hover_name="รหัสอ้างอิง (ID)", template="plotly_dark",
                     color_continuous_scale="Viridis"
                 )
                 st.plotly_chart(fig_c2, use_container_width=True)
@@ -691,29 +688,29 @@ else:
 # MODE B: Multi-File (Comparison)
 # ============================================
     elif len(results) > 1:
-        st.markdown(f"### เปรียบเทียบสิ่งมีชีวิต ({len(results)} ตัวอย่าง)")
+        st.markdown(f"### การประเมินความสัมพันธ์ระหว่างสายพันธุ์ (จำนวนข้อมูล: {len(results)} ตัวอย่าง)")
         
         df = pd.DataFrame([
             {
-                "Organism": r['name'].split(',')[0],
-                "Length (bp)": r['len'],
-                "Coding %": r['coding_pct'],
-                "Non-coding %": r['nc_pct'],
-                "GC %": r['gc_total']
+                "ชื่อสายพันธุ์ (Organism)": r['name'].split(',')[0],
+                "ขนาดจีโนม (bp)": r['len'],
+                "สัดส่วนรหัสโปรตีน (%)": r['coding_pct'],
+                "สัดส่วน Non-coding (%)": r['nc_pct'],
+                "ปริมาณ GC (%)": r['gc_total']
             } for r in results
         ])
 
         # 1. Summary Table
-        st.markdown("#### ตารางสรุปข้อมูล (Summary Table)")
+        st.markdown("#### ตารางสรุปข้อมูลทางสถิติข้ามสายพันธุ์ (Summary Table)")
         st.dataframe(df.style.highlight_max(axis=0, color='#1e40af'), use_container_width=True)
 
         # --- ส่วนเสริม: รายงานวิเคราะห์เปรียบเทียบข้ามสายพันธุ์ด้วย AI ---
         st.markdown("---")
-        st.subheader("🤖 AI Comparative Insight")
-        run_comp_ai = st.button("📊 สั่งให้ AI ทำรายงานวิเคราะห์เปรียบเทียบ")
+        st.subheader("🤖 รายงานวิเคราะห์เปรียบเทียบเชิงวิวัฒนาการโดยปัญญาประดิษฐ์ (AI Comparative Insight)")
+        run_comp_ai = st.button("📊 สร้างรายงานวิเคราะห์เปรียบเทียบข้ามสายพันธุ์")
         if run_comp_ai:
             if not api_key:
-                st.error("❌ กรุณากรอก Google API Key ที่แถบเมนูด้านซ้ายก่อนกดปุ่มวิเคราะห์ครับ")
+                st.error("❌ โปรดระบุ Google API Key ในแถบเมนูด้านซ้ายก่อนเริ่มการประมวลผลครับ")
             else:
                 data_str = df.to_string()
                 prompt = f"""
@@ -724,39 +721,39 @@ else:
                 1. Which organism demonstrates higher genetic complexity or evolutionary advancement based on genome size and coding vs non-coding ratios?
                 2. Identify if there's any correlation between GC content variants and environmental adaptations or lifestyle among these species.
                 3. Comment on the distribution patterns of Non-coding DNA (Junk DNA).
-                Answer clearly in Thai language.
+                Answer clearly in highly formal, academic Thai language suitable for a research paper.
                 """
                 response_text = get_ai_response(api_key, prompt)
-                st.markdown("### 📝 รายงานการวิเคราะห์ข้ามสิ่งมีชีวิตจาก AI")
+                st.markdown("### 📝 รายงานประเมินความแตกต่างข้ามสายพันธุ์")
                 st.info(response_text)
 
         # 2. Interactive Charts
         st.markdown("---")
-        st.markdown("#### ความสัมพันธ์: ขนาดจีโนม vs Junk DNA (Interactive)")
-        st.caption("ℹ️ เอาเมาส์ชี้ที่จุดเพื่อดูชื่อสิ่งมีชีวิต / หมุนลูกกลิ้งเพื่อซูม")
+        st.markdown("#### ความสัมพันธ์เชิงโครงสร้าง: ขนาดจีโนมและสัดส่วน Non-coding DNA")
+        st.caption("ℹ️ โปรดนำเมาส์ชี้ที่จุดพิกัดเพื่อดูชื่อสายพันธุ์ / สามารถใช้เมาส์เลื่อนหรือซูมขยายเพื่อดูรายละเอียด")
         
         fig_scatter = px.scatter(
-            df, x="Length (bp)", y="Non-coding %", color="GC %", size="Length (bp)",
-            hover_name="Organism", color_continuous_scale="Viridis", template="plotly_dark",
-            title="Genome Size vs. Non-coding DNA %"
+            df, x="ขนาดจีโนม (bp)", y="สัดส่วน Non-coding (%)", color="ปริมาณ GC (%)", size="ขนาดจีโนม (bp)",
+            hover_name="ชื่อสายพันธุ์ (Organism)", color_continuous_scale="Viridis", template="plotly_dark",
+            title="Genome Size vs. Non-coding DNA Percentage"
         )
         st.plotly_chart(fig_scatter, use_container_width=True)
 
         c1, c2 = st.columns(2)
         with c1:
-            st.markdown("**เปรียบเทียบ Junk DNA %**")
+            st.markdown("**การประเมินสัดส่วน Non-coding DNA (%)**")
             fig_bar, ax_bar = plt.subplots()
-            df_sorted = df.sort_values("Non-coding %", ascending=True)
-            ax_bar.barh(df_sorted["Organism"], df_sorted["Non-coding %"], color="#ac3632")
-            ax_bar.set_xlabel("% Non-coding DNA")
+            df_sorted = df.sort_values("สัดส่วน Non-coding (%)", ascending=True)
+            ax_bar.barh(df_sorted["ชื่อสายพันธุ์ (Organism)"], df_sorted["สัดส่วน Non-coding (%)"], color="#ac3632")
+            ax_bar.set_xlabel("สัดส่วน Non-coding DNA (%)")
             ax_bar.grid(axis='x', linestyle='--', alpha=0.3)
             st.pyplot(fig_bar)
 
         with c2:
-            st.markdown("**เปรียบเทียบ Genome Size**")
+            st.markdown("**การประเมินขนาดจีโนมโดยรวม (Total Genome Size)**")
             fig_bar2, ax_bar2 = plt.subplots()
-            df_sorted_len = df.sort_values("Length (bp)", ascending=True)
-            ax_bar2.barh(df_sorted_len["Organism"], df_sorted_len["Length (bp)"], color="#60a5fa") 
-            ax_bar2.set_xlabel("Base pairs (bp)")
+            df_sorted_len = df.sort_values("ขนาดจีโนม (bp)", ascending=True)
+            ax_bar2.barh(df_sorted_len["ชื่อสายพันธุ์ (Organism)"], df_sorted_len["ขนาดจีโนม (bp)"], color="#60a5fa") 
+            ax_bar2.set_xlabel("ขนาดรวม (Base pairs)")
             ax_bar2.grid(axis='x', linestyle='--', alpha=0.3)
             st.pyplot(fig_bar2)
