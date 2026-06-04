@@ -309,4 +309,454 @@ with st.sidebar:
                     try:
                         raw_data = fetch_ncbi(ncbi_id.strip(), ncbi_email.strip())
                         if not any(item['id'] == ncbi_id for item in st.session_state['ncbi_cache']):
-                            st.session_state
+                            st.session_state['ncbi_cache'].append({
+                                "id": ncbi_id.strip(),
+                                "filename": f"NCBI_{ncbi_id.strip()}.gbff",
+                                "content": raw_data
+                            })
+                        st.success("ดาวน์โหลดสำเร็จ!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(str(e))
+                    
+    if st.session_state['ncbi_cache']:
+        st.markdown(f"*(มีข้อมูลจาก NCBI จำนวน {len(st.session_state['ncbi_cache'])} รายการ)*")
+        if st.button("🗑️ ล้างข้อมูล NCBI"):
+            st.session_state['ncbi_cache'] = []
+            st.session_state['ncbi_search_results'] = None
+            st.rerun()
+            
+    st.markdown("---")
+    st.subheader("📂 อัปโหลดไฟล์")
+    uploaded_files = st.file_uploader(
+        "รองรับไฟล์ .gbff", 
+        type=["gbff"], 
+        accept_multiple_files=True
+    )
+
+    st.markdown("---")
+    with st.expander("วิธีการใช้งาน"):
+        st.markdown("""
+        1. **เตรียมไฟล์:** โหลดไฟล์ `.gbff` หรือค้นหา/ดึงจาก NCBI แบบออนไลน์
+        2. **ป้อน API Key:** หากต้องการใช้ระบบ AI แนะนำให้ระบุคีย์ที่แถบด้านซ้าย
+        3. **โหมดไฟล์เดียว:** คลิกเลือกโครโมโซมเพื่อดูรายละเอียดและสั่ง AI วิเคราะห์โครโมโซมนั้น ๆ
+        4. **โหมดเปรียบเทียบ:** นำเข้าหลายไฟล์เพื่อวิเคราะห์เชิงวิวัฒนาการ
+        """)
+
+# ============================================
+# 4. Main Analysis Area
+# ============================================
+st.markdown('<h1 class="main-header">Genome Analysis Dashboard</h1>', unsafe_allow_html=True)
+
+has_files = bool(uploaded_files)
+has_ncbi = bool(st.session_state['ncbi_cache'])
+
+if not has_files and not has_ncbi:
+    st.info("⬅️ กรุณาอัปโหลดไฟล์ .gbff หรือ ค้นหาข้อมูลจาก NCBI ที่แถบเมนูด้านซ้ายเพื่อเริ่มต้น")
+    
+    cols = st.columns(3)
+    with cols[0]:
+        st.markdown("### Deep Analysis")
+        st.write("วิเคราะห์โครงสร้างยีนและ Junk DNA เชิงลึก")
+    with cols[1]:
+        st.markdown("### Comparison")
+        st.write("เปรียบเทียบสิ่งมีชีวิตหลายสายพันธุ์ (Interactive)")
+    with cols[2]:
+        st.markdown("### Data Export & AI Assistant")
+        st.write("ส่งออกข้อมูล Junk DNA และใช้ AI สรุปเชิงชีววิทยา")
+
+else:
+    results = []
+    errors = []
+    
+    with st.spinner('กำลังประมวลผล DNA...'):
+        if has_files:
+            for uploaded_file in uploaded_files:
+                content = uploaded_file.getvalue().decode("utf-8")
+                data, err = process_genbank(content, uploaded_file.name)
+                if data: results.append(data)
+                else: errors.append(err)
+        
+        if has_ncbi:
+            for item in st.session_state['ncbi_cache']:
+                data, err = process_genbank(item['content'], item['filename'])
+                if data: results.append(data)
+                else: errors.append(err)
+
+    if errors:
+        for e in errors: st.error(e)
+
+    # ============================================
+    # MODE A: Single File (Deep Dive)
+    # ============================================
+    if len(results) == 1:
+        data = results[0]
+        st.markdown(f"### ผลการวิเคราะห์: {data['name']}")
+        st.caption(f"File: {data['filename']} | จำนวนโครโมโซมที่พบ: {data['total_chromosomes']} โครโมโซม")
+        
+        # 💡 [ส่วนที่เพิ่มใหม่] แผงข้อมูลสรุปภาพรวมทั้งจีโนม (Whole Genome Summary)
+        st.markdown("#### 🌍 สรุปภาพรวมทั้งจีโนม (Whole Genome Summary)")
+        wg1, wg2, wg3, wg4 = st.columns(4)
+        wg1.metric("Total Genome Size", f"{data['len']:,} bp")
+        wg2.metric("Total GC Content", f"{data['gc_total']:.2f}%")
+        wg3.metric("Overall Coding DNA", f"{data['coding_pct']:.2f}%")
+        wg4.metric("Overall Junk DNA", f"{data['nc_pct']:.2f}%")
+        st.divider()
+        # ----------------------------------------------------
+        
+        chrom_ids = list(data['chromosomes'].keys())
+        
+        if 'selected_chrom_id' not in st.session_state or st.session_state.selected_chrom_id not in chrom_ids:
+            st.session_state.selected_chrom_id = chrom_ids[0]
+            
+        if len(chrom_ids) > 1:
+            st.markdown("### 🧬 แผนผังโครโมโซม (Chromosome Map)")
+            st.write("👆 **คลิกจิ้มเลือกที่แท่งโครโมโซม** ในแผนผังด้านล่างนี้ เพื่อสลับดูสถิติและข้อมูลเชิงลึกได้ทันที")
+
+            c_names = []
+            c_lengths = []
+            for cid in chrom_ids:
+                desc = data['chromosomes'][cid]['desc']
+                match = re.search(r'chromosome\s+([A-Za-z0-9]+)', desc, re.IGNORECASE)
+                short_name = match.group(1).upper() if match else cid
+                c_names.append(short_name)
+                c_lengths.append(data['chromosomes'][cid]['len'])
+
+            name_to_id = dict(zip(c_names, chrom_ids))
+
+            colors = []
+            line_colors = []
+            for cid in chrom_ids:
+                if cid == st.session_state.selected_chrom_id:
+                    colors.append('rgba(99, 102, 241, 0.7)') 
+                    line_colors.append('#818cf8')
+                else:
+                    colors.append('rgba(255, 255, 255, 0.08)') 
+                    line_colors.append('#9CA3AF')
+
+            fig = go.Figure(data=[
+                go.Bar(
+                    x=c_names,
+                    y=c_lengths,
+                    marker=dict(color=colors, line=dict(color=line_colors, width=2)),
+                    width=0.4,
+                    hoverinfo='x+y',
+                    hovertemplate='Chromosome %{x}<br>Length: %{y:,} bp<extra></extra>'
+                )
+            ])
+
+            fig.update_layout(
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                xaxis=dict(showgrid=False, zeroline=False, side='top', tickfont=dict(size=14, color="#E5E7EB"), fixedrange=True),
+                yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, autorange="reversed", fixedrange=True),
+                height=220,
+                margin=dict(l=0, r=0, t=40, b=0),
+                dragmode=False
+            )
+            
+            chart_event = st.plotly_chart(
+                fig, use_container_width=True, config={'displayModeBar': False},
+                on_select="rerun", selection_mode="points"
+            )
+            
+            if chart_event and "selection" in chart_event and "points" in chart_event["selection"]:
+                points = chart_event["selection"]["points"]
+                if len(points) > 0:
+                    clicked_x = points[0]["x"]
+                    clicked_id = name_to_id.get(clicked_x)
+                    if clicked_id and clicked_id != st.session_state.selected_chrom_id:
+                        st.session_state.selected_chrom_id = clicked_id
+                        st.rerun()
+
+            selected_chrom_id = st.session_state.selected_chrom_id
+            st.markdown("<br>", unsafe_allow_html=True)
+        else:
+            selected_chrom_id = chrom_ids[0]
+            
+        c_data = data['chromosomes'][selected_chrom_id]
+        
+        # 1. Key Metrics 
+        st.markdown(f"#### 📊 ข้อมูลเชิงลึกของ: {selected_chrom_id} ({c_data['desc']})")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Chromosome Length", f"{c_data['len']:,} bp")
+        m2.metric("GC Content", f"{c_data['gc_total']:.2f}%")
+        m3.metric("Coding DNA (CDS)", f"{c_data['coding_pct']:.2f}%")
+        m4.metric("Junk/Non-coding", f"{c_data['nc_pct']:.2f}%")
+        
+        st.divider()
+
+        # 2. Charts Row 1
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**1. การกระจายตัวของ Intergenic Length**")
+            lengths = [len(i) for i in c_data['intergenic_seqs'] if len(i) > 0]
+            if lengths:
+                fig3, ax = plt.subplots(figsize=(6, 4))
+                ax.hist(lengths, bins=50, color="#818cf8", edgecolor='#1f2937', alpha=0.9)
+                ax.set_xlabel("Length (bp)")
+                ax.set_ylabel("Frequency")
+                ax.grid(axis='y', alpha=0.2, linestyle='--')
+                st.pyplot(fig3)
+            else:
+                st.warning("ไม่พบ Intergenic Regions")
+
+        with c2:
+            st.markdown("**2. GC-Content Comparison**")
+            gc_coding = [calculate_gc(c_data['seq'][s:e]) for s, e in c_data['cds_regions']]
+            gc_nc = [calculate_gc(s) for s in c_data['intergenic_seqs'] if len(s) > 0]
+            
+            if gc_coding and gc_nc:
+                fig2, ax2 = plt.subplots(figsize=(6, 4))
+                bp = ax2.boxplot([gc_coding, gc_nc], labels=["Coding", "Non-coding"], patch_artist=True)
+                for box in bp['boxes']:
+                    box.set(color='#34d399', linewidth=2)
+                    box.set(facecolor='#065f46')
+                for median in bp['medians']:
+                    median.set(color='white', linewidth=2)
+                ax2.set_ylabel("GC %")
+                ax2.grid(axis='y', alpha=0.2, linestyle='--')
+                st.pyplot(fig2)
+
+        st.divider()
+        
+        # 3. Sliding Window
+        st.markdown("**3. GC% Variation (Sliding Window)**")
+        window = 1000
+        seq = c_data['seq']
+        pos = []
+        vals = []
+        for i in range(0, len(seq), window):
+            sub = seq[i:i+window]
+            if len(sub) == window:
+                pos.append(i)
+                vals.append(calculate_gc(sub))
+        
+        if vals:
+            st.area_chart(pd.DataFrame({'GC%': vals}, index=pos), color="#6366f1")
+
+        # --- 🧬 ส่วนเสริม: สัดส่วนกรดอะมิโนบนโครโมโซม ---
+        st.divider()
+        st.markdown(f"**4. สัดส่วนการกระจายตัวของกรดอะมิโน (Amino Acid Composition) - พบโปรตีนทั้งหมด {c_data['total_proteins']:,} ชนิด**")
+        if c_data.get('aa_dist'):
+            df_aa = pd.DataFrame(list(c_data['aa_dist'].items()), columns=['Amino Acid', 'Count'])
+            
+            aa_full_names = {
+                'A': 'Alanine (อะลานีน)', 'C': 'Cysteine (ซิสเตอีน)', 'D': 'Aspartic acid (กรดแอสพาร์ติก)',
+                'E': 'Glutamic acid (กรดกลูตามิก)', 'F': 'Phenylalanine (ฟีนิลอะลานีน)', 'G': 'Glycine (ไกลซีน)',
+                'H': 'Histidine (ฮิสทิดีน)', 'I': 'Isoleucine (ไอโซลิวซีน)', 'K': 'Lysine (ไลซีน)',
+                'L': 'Leucine (ลิวซีน)', 'M': 'Methionine (เมไทโอนีน)', 'N': 'Asparagine (แอสพาราจีน)',
+                'P': 'Proline (โพรลีน)', 'Q': 'Glutamine (กลูตามีน)', 'R': 'Arginine (อาร์จินีน)',
+                'S': 'Serine (เซรีน)', 'T': 'Threonine (ทรีโอนีน)', 'V': 'Valine (วาลีน)',
+                'W': 'Tryptophan (ทริปโตเฟน)', 'Y': 'Tyrosine (ไทโรซีน)'
+            }
+            df_aa['Amino Acid'] = df_aa['Amino Acid'].map(aa_full_names)
+            df_aa = df_aa.sort_values(by="Count", ascending=False) 
+            
+            fig_aa = px.bar(
+                df_aa, x='Amino Acid', y='Count', color='Count',
+                template='plotly_dark', color_continuous_scale="Blugrn",
+                labels={"Count": "จำนวนครั้งที่พบ"}
+            )
+            fig_aa.update_layout(margin=dict(l=0, r=0, t=20, b=0), height=380)
+            st.plotly_chart(fig_aa, use_container_width=True, config={'displayModeBar': False})
+        else:
+            st.info("⚠️ ไม่พบลำดับข้อมูลกรดอะมิโน (Translation Feature) ในไฟล์นี้")
+
+        # --- 🤖 ส่วนเสริม: ระบบวิเคราะห์และถามตอบด้วย AI รายโครโมโซม ---
+        st.divider()
+        st.subheader("🧬 AI Biological Assistant")
+        ai_col1, ai_col2 = st.columns([1, 2])
+        
+        with ai_col1:
+            st.markdown("ระบบจะส่งสถิติของทุกโครโมโซมให้ AI เห็นภาพรวม แต่สั่งให้ AI **โฟกัสคำตอบเฉพาะโครโมโซมที่คุณเลือก** หรือตอบคำถามเฉพาะเจาะจงด้านล่าง")
+            user_question = st.text_input("💡 ถามคำถามชีววิทยาเกี่ยวกับโครโมโซมนี้", placeholder="เช่น ทำไมโครโมโซมนี้ถึงมีกรดอะมิโน Serine มากเป็นพิเศษ?")
+            run_ai = st.button("✨ เริ่มการวิเคราะห์ด้วย AI")
+            
+        with ai_col2:
+            if run_ai:
+                if not api_key:
+                    st.error("❌ กรุณากรอก Google API Key ที่แถบเมนูด้านซ้ายก่อนกดปุ่มวิเคราะห์ครับ")
+                else:
+                    all_chroms_summary = ""
+                    for cid, cinfo in data['chromosomes'].items():
+                        all_chroms_summary += f"- โครโมโซม {cid}: ความยาว={cinfo['len']:,} bp, GC={cinfo['gc_total']:.2f}%, Non-coding={cinfo['nc_pct']:.2f}%, จำนวนโปรตีน={cinfo['total_proteins']:,} ชนิด\n"
+                    
+                    prompt = f"""
+                    You are an expert Bioinformatics AI Assistant. Analyze the genomic data of this organism.
+                    
+                    [GLOBAL GENOME CONTEXT]
+                    Organism Classification Name: {data['name']}
+                    Total Chromosomes in this file: {data['total_chromosomes']}
+                    Here is the statistical summary of ALL chromosomes for your baseline comparison:
+                    {all_chroms_summary}
+                    
+                    [TARGET FOCUS - โครโมโซมที่ผู้ใช้เลือกตรวจสอบอยู่ตอนนี้]
+                    Selected Chromosome ID: {selected_chrom_id}
+                    Description: {c_data['desc']}
+                    Length: {c_data['len']:,} bp
+                    GC Content: {c_data['gc_total']:.2f}%
+                    Coding Region (CDS) Ratio: {c_data['coding_pct']:.2f}%
+                    Non-coding Region (Junk DNA) Ratio: {c_data['nc_pct']:.2f}%
+                    Total Protein Products: {c_data['total_proteins']:,}
+                    Amino Acid Distribution on this targeted chromosome: {c_data['aa_dist']}
+                    
+                    [USER QUESTION / INTENT]
+                    Question: {user_question if user_question else "Please provide a comprehensive biological analysis and evolutionary summary of the selected chromosome."}
+                    
+                    CRITICAL INSTRUCTION:
+                    1. Focus your answer primarily on the [TARGET FOCUS] chromosome and directly answer the user's question or analyze it deeply.
+                    2. Use the [GLOBAL GENOME CONTEXT] data only to make meaningful biological comparisons.
+                    3. Do not generalize the answer to the whole genome unless making a comparison. Keep the focus tight.
+                    4. Answer in scientifically rigorous, clear, and beautiful Thai language.
+                    """
+                    
+                    response_text = get_ai_response(api_key, prompt)
+                    st.markdown("### 📝 สรุปและคำแนะนำจาก AI")
+                    st.info(response_text)
+            else:
+                st.info("💡 ระบุ API Key ทางซ้ายมือ แล้วกดปุ่มวิเคราะห์เพื่อรับข้อมูลเชิงลึกจาก AI")
+
+        # 5. Advanced Analysis Section
+        st.markdown("---")
+        st.subheader("Advanced Analysis: Repeats & Data")
+        
+        ac1, ac2 = st.columns(2)
+        with ac1:
+            st.markdown("#### Motif Search in Junk DNA")
+            st.caption("ค้นหาจำนวนจุดที่พบรหัสพันธุกรรมซ้ำๆ ในส่วน Non-coding")
+            
+            sc1, sc2 = st.columns(2)
+            with sc1: motif_input = st.text_input("Pattern (e.g. AT, G)", value="AT")
+            with sc2: threshold_input = st.number_input("Min Repeats", min_value=3, value=5)
+            
+            total_repeats = 0
+            for s in c_data['intergenic_seqs']:
+                total_repeats += find_simple_repeats(s, motif_input, threshold_input)
+            
+            st.metric(f"Found '{motif_input}' repeated >{threshold_input} times", f"{total_repeats:,} spots")
+
+        with ac2:
+            st.markdown("#### Export Data")
+            st.caption("ดาวน์โหลดลำดับเบสส่วน Junk DNA (FASTA) เพื่อนำไปวิเคราะห์ต่อ")
+            
+            fasta_str = ""
+            for i, seq_segment in enumerate(c_data['intergenic_seqs']):
+                if len(seq_segment) > 0:
+                    fasta_str += f">Intergenic_{i+1}_{c_data['id']}\n{seq_segment}\n"
+            
+            st.download_button(
+                label="Download Non-coding Sequences (.fasta)",
+                data=fasta_str,
+                file_name=f"{c_data['id']}_junk_dna.fasta",
+                mime="text/plain"
+            )
+            
+        if data['total_chromosomes'] > 1:
+            st.markdown("---")
+            st.markdown(f"### 📊 เปรียบเทียบโครโมโซมภายใน {data['name']} (Intra-organism)")
+            st.write("ตารางและกราฟแสดงการเปรียบเทียบค่าสถิติระหว่างโครโมโซมต่างๆ ภายในสิ่งมีชีวิตนี้")
+
+            chrom_list = []
+            for cid, cinfo in data['chromosomes'].items():
+                chrom_list.append({
+                    "Chromosome": cid,
+                    "Length (bp)": cinfo['len'],
+                    "GC %": cinfo['gc_total'],
+                    "Coding %": cinfo['coding_pct'],
+                    "Non-coding (Junk) %": cinfo['nc_pct']
+                })
+            df_chroms = pd.DataFrame(chrom_list)
+            st.dataframe(df_chroms.style.highlight_max(axis=0, color='#1e40af'), use_container_width=True)
+
+            cc1, cc2 = st.columns(2)
+            with cc1:
+                st.markdown("**เปรียบเทียบขนาดโครโมโซม**")
+                fig_c1 = px.bar(
+                    df_chroms, x="Chromosome", y="Length (bp)", color="GC %", 
+                    template="plotly_dark", color_continuous_scale="Viridis"
+                )
+                st.plotly_chart(fig_c1, use_container_width=True)
+                
+            with cc2:
+                st.markdown("**ความสัมพันธ์: ขนาดโครโมโซม vs Non-coding %**")
+                fig_c2 = px.scatter(
+                    df_chroms, x="Length (bp)", y="Non-coding (Junk) %", color="GC %", 
+                    size="Length (bp)", hover_name="Chromosome", template="plotly_dark",
+                    color_continuous_scale="Viridis"
+                )
+                st.plotly_chart(fig_c2, use_container_width=True)
+
+# ============================================
+# MODE B: Multi-File (Comparison)
+# ============================================
+    elif len(results) > 1:
+        st.markdown(f"### เปรียบเทียบสิ่งมีชีวิต ({len(results)} ตัวอย่าง)")
+        
+        df = pd.DataFrame([
+            {
+                "Organism": r['name'].split(',')[0],
+                "Length (bp)": r['len'],
+                "Coding %": r['coding_pct'],
+                "Non-coding %": r['nc_pct'],
+                "GC %": r['gc_total']
+            } for r in results
+        ])
+
+        # 1. Summary Table
+        st.markdown("#### ตารางสรุปข้อมูล (Summary Table)")
+        st.dataframe(df.style.highlight_max(axis=0, color='#1e40af'), use_container_width=True)
+
+        # --- ส่วนเสริม: รายงานวิเคราะห์เปรียบเทียบข้ามสายพันธุ์ด้วย AI ---
+        st.markdown("---")
+        st.subheader("🤖 AI Comparative Insight")
+        run_comp_ai = st.button("📊 สั่งให้ AI ทำรายงานวิเคราะห์เปรียบเทียบ")
+        if run_comp_ai:
+            if not api_key:
+                st.error("❌ กรุณากรอก Google API Key ที่แถบเมนูด้านซ้ายก่อนกดปุ่มวิเคราะห์ครับ")
+            else:
+                data_str = df.to_string()
+                prompt = f"""
+                You are a Bioinformatics expert. Analyze this comparative data table of multiple organisms:
+                {data_str}
+                
+                Please provide a rigorous comparative analysis addressing:
+                1. Which organism demonstrates higher genetic complexity or evolutionary advancement based on genome size and coding vs non-coding ratios?
+                2. Identify if there's any correlation between GC content variants and environmental adaptations or lifestyle among these species.
+                3. Comment on the distribution patterns of Non-coding DNA (Junk DNA).
+                Answer clearly in Thai language.
+                """
+                response_text = get_ai_response(api_key, prompt)
+                st.markdown("### 📝 รายงานการวิเคราะห์ข้ามสิ่งมีชีวิตจาก AI")
+                st.info(response_text)
+
+        # 2. Interactive Charts
+        st.markdown("---")
+        st.markdown("#### ความสัมพันธ์: ขนาดจีโนม vs Junk DNA (Interactive)")
+        st.caption("ℹ️ เอาเมาส์ชี้ที่จุดเพื่อดูชื่อสิ่งมีชีวิต / หมุนลูกกลิ้งเพื่อซูม")
+        
+        fig_scatter = px.scatter(
+            df, x="Length (bp)", y="Non-coding %", color="GC %", size="Length (bp)",
+            hover_name="Organism", color_continuous_scale="Viridis", template="plotly_dark",
+            title="Genome Size vs. Non-coding DNA %"
+        )
+        st.plotly_chart(fig_scatter, use_container_width=True)
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**เปรียบเทียบ Junk DNA %**")
+            fig_bar, ax_bar = plt.subplots()
+            df_sorted = df.sort_values("Non-coding %", ascending=True)
+            ax_bar.barh(df_sorted["Organism"], df_sorted["Non-coding %"], color="#ac3632")
+            ax_bar.set_xlabel("% Non-coding DNA")
+            ax_bar.grid(axis='x', linestyle='--', alpha=0.3)
+            st.pyplot(fig_bar)
+
+        with c2:
+            st.markdown("**เปรียบเทียบ Genome Size**")
+            fig_bar2, ax_bar2 = plt.subplots()
+            df_sorted_len = df.sort_values("Length (bp)", ascending=True)
+            ax_bar2.barh(df_sorted_len["Organism"], df_sorted_len["Length (bp)"], color="#60a5fa") 
+            ax_bar2.set_xlabel("Base pairs (bp)")
+            ax_bar2.grid(axis='x', linestyle='--', alpha=0.3)
+            st.pyplot(fig_bar2)
