@@ -66,7 +66,7 @@ def search_ncbi_genomes(query, email):
     return results
 
 def fetch_ncbi(acc_id, email, max_retries=5):
-    """ดึงข้อมูล GenBank จาก NCBI พร้อมระบบสู้ชีวิต ป้องกัน Error 429 และเน็ตหลุด"""
+    """ดึงข้อมูล GenBank จาก NCBI พร้อมระบบสู้ชีวิต ป้องกัน Error 429 และเน็ตหลุด (อัปเกรด)"""
     Entrez.email = email
     acc_id = acc_id.strip().upper()
     
@@ -78,15 +78,16 @@ def fetch_ncbi(acc_id, email, max_retries=5):
             except Exception as e:
                 err_msg = str(e)
                 if attempt < max_retries - 1:
-                    # 💡 ถ้าโดน Error 429 (โหลดถี่ไป) ให้หยุดพักนานขึ้นเป็น 3 วินาที
+                    # ถ้าโดน Error 429 ให้พัก 4 วินาที, อาการอื่นพัก 2 วินาที
                     if "429" in err_msg:
-                        time.sleep(3)
+                        time.sleep(4)
                     else:
                         time.sleep(2)
                     continue
                 else:
-                    if "IncompleteRead" in err_msg or "timeout" in err_msg.lower():
-                        raise Exception("เซิร์ฟเวอร์ NCBI ตัดการเชื่อมต่อกลางคัน โปรดลองใหม่อีกครั้ง")
+                    # 💡 ดักจับคำว่า EOF และ TXCLIENT ที่ทำให้เกิด Error แดงบนจอ
+                    if "IncompleteRead" in err_msg or "timeout" in err_msg.lower() or "EOF" in err_msg or "TXCLIENT" in err_msg:
+                        raise Exception("เซิร์ฟเวอร์ NCBI ตัดการเชื่อมต่อกลางคัน (EOF/Timeout) โปรดเว้นระยะสักครู่แล้วลองกดดาวน์โหลดใหม่อีกครั้ง")
                     raise Exception(f"เกิดข้อผิดพลาดในการโหลดข้อมูล: {err_msg}")
 
     if acc_id.startswith("GCF_") or acc_id.startswith("GCA_"):
@@ -107,14 +108,15 @@ def fetch_ncbi(acc_id, email, max_retries=5):
                 raise Exception(f"จีโนมนี้ประกอบด้วยชิ้นส่วนถึง {len(nucl_ids)} ชิ้น ซึ่งใหญ่เกินไป แนะนำให้ดาวน์โหลดไฟล์ .gbff จากเว็บ NCBI มาอัปโหลดเองครับ")
             
             all_data = ""
-            batch_size = 10
+            # 💡 ลดขนาด Batch Size ลงเหลือทีละ 5 ชิ้น เพื่อให้ไฟล์เบาลง ไม่โดนตัดสาย
+            batch_size = 5 
             for i in range(0, len(nucl_ids), batch_size):
                 batch_ids = nucl_ids[i:i+batch_size]
                 id_string = ",".join(batch_ids)
                 all_data += _fetch_with_retry(id_string)
                 
-                # 💡 สำคัญ: ใส่เบรกพัก 0.5 วินาที ระหว่างรอบเพื่อไม่ให้ NCBI แบนเราจากการโหลดถี่เกินไป
-                time.sleep(0.5)
+                # 💡 เพิ่มเวลาเบรกระหว่างรอบเป็น 1 วินาที ให้เซิร์ฟเวอร์หายใจทัน
+                time.sleep(1)
                 
             return all_data
     else:
@@ -285,7 +287,7 @@ with st.sidebar:
                 selected_acc = st.selectbox("พบข้อมูล โปรดเลือกจีโนม:", options=list(options.keys()), format_func=lambda x: options[x])
                 
                 if st.button("📥 ดาวน์โหลดจีโนมที่เลือก"):
-                    with st.spinner(f"กำลังดาวน์โหลดและประมวลผล {selected_acc} (ทยอยโหลดทีละ 10 ชิ้น อาจใช้เวลาสักครู่)..."):
+                    with st.spinner(f"กำลังดาวน์โหลดและประมวลผล {selected_acc} (ทยอยโหลดทีละ 5 ชิ้น อาจใช้เวลาสักครู่)..."):
                         try:
                             raw_data = fetch_ncbi(selected_acc, ncbi_email)
                             if not any(item['id'] == selected_acc for item in st.session_state['ncbi_cache']):
@@ -309,7 +311,7 @@ with st.sidebar:
             if not ncbi_email or not ncbi_id:
                 st.error("กรุณากรอก Email และ RefSeq ID ให้ครบถ้วน")
             else:
-                with st.spinner(f"กำลังดาวน์โหลดและประมวลผล {ncbi_id} (ทยอยโหลดทีละ 10 ชิ้น อาจใช้เวลาสักครู่)..."):
+                with st.spinner(f"กำลังดาวน์โหลดและประมวลผล {ncbi_id} (ทยอยโหลดทีละ 5 ชิ้น อาจใช้เวลาสักครู่)..."):
                     try:
                         raw_data = fetch_ncbi(ncbi_id.strip(), ncbi_email.strip())
                         if not any(item['id'] == ncbi_id for item in st.session_state['ncbi_cache']):
