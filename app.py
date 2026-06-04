@@ -40,8 +40,9 @@ if 'ncbi_search_results' not in st.session_state:
 # 2. Helper Functions (Logic)
 # ============================================
 def search_ncbi_genomes(query, email):
-    """ฟังก์ชันค้นหาชื่อสิ่งมีชีวิตแบบ Real-time (ค้นเฉพาะ GCF/RefSeq)"""
+    """ฟังก์ชันค้นหาชื่อสิ่งมีชีวิตแบบ Real-time โดยบังคับหาเฉพาะเกรดมาตรฐาน (RefSeq/GCF)"""
     Entrez.email = email
+    
     search_term = f"({query}[Organism] OR {query}[All Fields]) AND \"latest refseq\"[filter]"
     
     with Entrez.esearch(db="assembly", term=search_term, retmax=5) as handle:
@@ -64,24 +65,29 @@ def search_ncbi_genomes(query, email):
                 results.append({"id": acc, "label": f"{org} ({acc}) - {name[:20]}..."})
     return results
 
-def fetch_ncbi(acc_id, email, max_retries=3):
-    """ดึงข้อมูล GenBank จาก NCBI พร้อมระบบโหลดทีละส่วน (Batch Download) ป้องกันเน็ตหลุด"""
+def fetch_ncbi(acc_id, email, max_retries=5):
+    """ดึงข้อมูล GenBank จาก NCBI พร้อมระบบสู้ชีวิต ป้องกัน Error 429 และเน็ตหลุด"""
     Entrez.email = email
     acc_id = acc_id.strip().upper()
     
-    # 🛠️ ฟังก์ชันย่อยสำหรับโหลดพร้อม Auto-Retry
     def _fetch_with_retry(id_string):
         for attempt in range(max_retries):
             try:
                 with Entrez.efetch(db="nucleotide", id=id_string, rettype="gbwithparts", retmode="text") as handle:
                     return handle.read()
             except Exception as e:
+                err_msg = str(e)
                 if attempt < max_retries - 1:
-                    time.sleep(2)
+                    # 💡 ถ้าโดน Error 429 (โหลดถี่ไป) ให้หยุดพักนานขึ้นเป็น 3 วินาที
+                    if "429" in err_msg:
+                        time.sleep(3)
+                    else:
+                        time.sleep(2)
+                    continue
                 else:
-                    if "IncompleteRead" in str(e) or "timeout" in str(e).lower():
-                        raise Exception("เซิร์ฟเวอร์ NCBI ตัดการเชื่อมต่อกลางคัน ลองดาวน์โหลดใหม่อีกครั้ง")
-                    raise Exception(f"เกิดข้อผิดพลาดในการโหลดข้อมูล: {str(e)}")
+                    if "IncompleteRead" in err_msg or "timeout" in err_msg.lower():
+                        raise Exception("เซิร์ฟเวอร์ NCBI ตัดการเชื่อมต่อกลางคัน โปรดลองใหม่อีกครั้ง")
+                    raise Exception(f"เกิดข้อผิดพลาดในการโหลดข้อมูล: {err_msg}")
 
     if acc_id.startswith("GCF_") or acc_id.startswith("GCA_"):
         with Entrez.esearch(db="assembly", term=acc_id) as search_handle:
@@ -97,18 +103,19 @@ def fetch_ncbi(acc_id, email, max_retries=3):
             
             nucl_ids = [link["Id"] for link in link_rec[0]["LinkSetDb"][0]["Link"]]
             
-            # ขยายเพดานรองรับเป็น 200 ชิ้น สำหรับพวกแบคทีเรียที่เป็น Contig
             if len(nucl_ids) > 200:
-                raise Exception(f"จีโนมนี้ประกอบด้วยชิ้นส่วนถึง {len(nucl_ids)} ชิ้น ซึ่งใหญ่เกินไป แนะนำให้โหลดไฟล์จากเว็บมาอัปโหลดเองครับ")
+                raise Exception(f"จีโนมนี้ประกอบด้วยชิ้นส่วนถึง {len(nucl_ids)} ชิ้น ซึ่งใหญ่เกินไป แนะนำให้ดาวน์โหลดไฟล์ .gbff จากเว็บ NCBI มาอัปโหลดเองครับ")
             
-            # 🛠️ โหลดแบบแบ่งกลุ่ม (Batching) กลุ่มละ 10 ชิ้น
             all_data = ""
             batch_size = 10
             for i in range(0, len(nucl_ids), batch_size):
                 batch_ids = nucl_ids[i:i+batch_size]
                 id_string = ",".join(batch_ids)
                 all_data += _fetch_with_retry(id_string)
-            
+                
+                # 💡 สำคัญ: ใส่เบรกพัก 0.5 วินาที ระหว่างรอบเพื่อไม่ให้ NCBI แบนเราจากการโหลดถี่เกินไป
+                time.sleep(0.5)
+                
             return all_data
     else:
         return _fetch_with_retry(acc_id)
