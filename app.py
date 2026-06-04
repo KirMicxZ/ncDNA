@@ -29,27 +29,53 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# สร้าง Session State สำหรับเก็บข้อมูลจาก NCBI
+# สร้าง Session State 
 if 'ncbi_cache' not in st.session_state:
     st.session_state['ncbi_cache'] = []
+if 'ncbi_search_results' not in st.session_state:
+    st.session_state['ncbi_search_results'] = None
 
 # ============================================
 # 2. Helper Functions (Logic)
 # ============================================
+def search_ncbi_genomes(query, email):
+    """ฟังก์ชันค้นหาชื่อสิ่งมีชีวิตแบบ Real-time จากฐานข้อมูล Assembly"""
+    Entrez.email = email
+    # ดึง ID ที่ตรงกับคำค้นหา (จำกัด 5 รายการเพื่อความรวดเร็ว)
+    with Entrez.esearch(db="assembly", term=f"{query}[Organism] OR {query}[All Fields]", retmax=5) as handle:
+        record = Entrez.read(handle)
+        id_list = record.get("IdList", [])
+        
+    if not id_list:
+        return []
+        
+    # ดึงรายละเอียดของแต่ละ ID มาแสดงผลให้ผู้ใช้เลือก
+    results = []
+    with Entrez.esummary(db="assembly", id=",".join(id_list)) as handle:
+        summaries = Entrez.read(handle)
+        doc_sums = summaries.get('DocumentSummarySet', {}).get('DocumentSummary', [])
+        
+        for summary in doc_sums:
+            acc = summary.get('AssemblyAccession', '')
+            org = summary.get('SpeciesName', summary.get('Organism', 'Unknown Organism'))
+            name = summary.get('AssemblyName', '')
+            if acc:
+                # จัดรูปแบบชื่อที่จะไปโชว์ใน Dropdown
+                results.append({"id": acc, "label": f"{org} ({acc}) - {name[:20]}..."})
+    return results
+
 def fetch_ncbi(acc_id, email):
-    """ดึงข้อมูล GenBank จาก NCBI พร้อมรองรับทั้งรหัส Nucleotide (NC_) และ Assembly (GCF_/GCA_)"""
+    """ดึงข้อมูล GenBank จาก NCBI พร้อมรองรับทั้งรหัส Nucleotide และ Assembly"""
     Entrez.email = email
     acc_id = acc_id.strip().upper()
     
     if acc_id.startswith("GCF_") or acc_id.startswith("GCA_"):
-        # 1. ค้นหา Assembly ID
         with Entrez.esearch(db="assembly", term=acc_id) as search_handle:
             search_rec = Entrez.read(search_handle)
             if not search_rec["IdList"]:
                 raise Exception(f"ไม่พบข้อมูลสำหรับ Assembly: {acc_id}")
             assembly_id = search_rec["IdList"][0]
         
-        # 2. แกะกล่อง หาลิงก์โครโมโซมย่อยๆ ไปยังฐานข้อมูล Nucleotide
         with Entrez.elink(dbfrom="assembly", db="nucleotide", id=assembly_id) as link_handle:
             link_rec = Entrez.read(link_handle)
             if not link_rec[0].get("LinkSetDb"):
@@ -60,7 +86,6 @@ def fetch_ncbi(acc_id, email):
             if len(nucl_ids) > 50:
                 raise Exception(f"จีโนมนี้ประกอบด้วยชิ้นส่วนถึง {len(nucl_ids)} ชิ้น แนะนำให้ดาวน์โหลดไฟล์ .gbff จากเว็บ NCBI มาอัปโหลดเองครับ")
             
-            # 3. ดาวน์โหลดโครโมโซมย่อยทั้งหมดรวดเดียว
             id_string = ",".join(nucl_ids)
             with Entrez.efetch(db="nucleotide", id=id_string, rettype="gbwithparts", retmode="text") as fetch_handle:
                 return fetch_handle.read()
@@ -80,22 +105,19 @@ def find_simple_repeats(seq, motif="AT", threshold=5):
     return len(matches)
 
 def process_genbank(file_content, filename):
-    """Reads a GenBank file and extracts key metrics for ALL chromosomes."""
     try:
         records = list(SeqIO.parse(io.StringIO(file_content), "genbank"))
         if not records: return None, "ไม่พบข้อมูลในไฟล์"
     except Exception as e:
         return None, f"Error reading {filename}: {e}"
 
-    # ระบบกรองโครโมโซมซ้ำ (Deduplication) เพื่อแก้ปัญหาแท่งกราฟซ้อนกัน
     seen_short_names = set()
     filtered_records = []
     for record in records:
         match = re.search(r'chromosome\s+([A-Za-z0-9]+)', record.description, re.IGNORECASE)
         short_name = match.group(1).upper() if match else record.id
         
-        if short_name in seen_short_names:
-            continue 
+        if short_name in seen_short_names: continue 
         seen_short_names.add(short_name)
         filtered_records.append(record)
     records = filtered_records
@@ -111,7 +133,6 @@ def process_genbank(file_content, filename):
         total_len += slen
         total_gc += (seq.count("G") + seq.count("C"))
         
-        # Extract CDS & Amino Acids
         cds_regions = []
         protein_seqs = []  
         for f in record.features:
@@ -121,24 +142,19 @@ def process_genbank(file_content, filename):
                     protein_seqs.append(f.qualifiers['translation'][0].upper())
                     
         cds_regions.sort()
-
         coding_len = sum(e - s for s, e in cds_regions)
         total_coding_len += coding_len
         
         coding_pct = (coding_len / slen) * 100 if slen > 0 else 0
         nc_pct = 100 - coding_pct
         
-        # Extract Intergenic Regions
         intergenic_seqs = []
         prev = 0
         for s, e in cds_regions:
-            if s > prev:
-                intergenic_seqs.append(seq[prev:s])
+            if s > prev: intergenic_seqs.append(seq[prev:s])
             prev = e
-        if prev < slen:
-            intergenic_seqs.append(seq[prev:slen])
+        if prev < slen: intergenic_seqs.append(seq[prev:slen])
 
-        # คำนวณความถี่ของกรดอะมิโน
         all_proteins_combined = "".join(protein_seqs)
         aa_list = list("ACDEFGHIKLMNPQRSTVWY")
         aa_dist = {aa: all_proteins_combined.count(aa) for aa in aa_list} if all_proteins_combined else {}
@@ -157,7 +173,6 @@ def process_genbank(file_content, filename):
             "total_proteins": len(protein_seqs)
         }
 
-    # --- 🛠️ ระบบจัดเรียงลำดับโครโมโซมตามลำดับธรรมชาติ (Natural Sorting) ---
     def roman_to_int(roman_str):
         roman_dict = {'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000}
         res = 0
@@ -173,16 +188,13 @@ def process_genbank(file_content, filename):
         match = re.search(r'chromosome\s+([A-Za-z0-9]+)', cinfo['desc'], re.IGNORECASE)
         if match:
             val = match.group(1).upper()
-            if val.isdigit():
-                return (0, int(val), val) 
+            if val.isdigit(): return (0, int(val), val) 
             if re.match(r'^M{0,4}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$', val) and val != "":
                 return (0, roman_to_int(val), val) 
             return (1, 0, val) 
         return (2, 0, item[0]) 
 
     chromosomes_data = dict(sorted(chromosomes_data.items(), key=chrom_key))
-    # -----------------------------------------------------------------------
-
     overall_coding_pct = (total_coding_len / total_len) * 100 if total_len > 0 else 0
     
     return {
@@ -197,9 +209,7 @@ def process_genbank(file_content, filename):
     }, None
 
 def get_ai_response(api_key, prompt):
-    """ฟังก์ชันส่งข้อมูลติดต่อกับ Gemini API เพื่อขอคำวิเคราะห์"""
-    if not api_key:
-        return "⚠️ กรุณาระบุ Google API Key ในแถบเมนูด้านซ้ายเพื่อใช้งานฟีเจอร์ AI"
+    if not api_key: return "⚠️ กรุณาระบุ Google API Key ในแถบเมนูด้านซ้ายเพื่อใช้งานฟีเจอร์ AI"
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-2.5-flash') 
@@ -216,41 +226,87 @@ with st.sidebar:
     st.title("Genome Analyzer")
     st.markdown("เครื่องมือวิเคราะห์โครงสร้างจีโนม")
     
-    # --- ส่วนตั้งค่า AI ---
     st.markdown("---")
     st.subheader("🤖 AI Configuration")
-    api_key = st.text_input("Google API Key", type="password", help="ใส่ API Key จาก Google AI Studio เพื่อเปิดใช้งานฟีเจอร์วิเคราะห์ด้วย AI")
+    api_key = st.text_input("Google API Key", type="password", help="ใส่ API Key จาก Google AI Studio เพื่อวิเคราะห์ด้วย AI")
     
-    # --- ระบบดาวน์โหลดจาก NCBI ---
+    # --- ระบบดาวน์โหลดและค้นหาแบบ Real-time จาก NCBI ---
     st.markdown("---")
     st.subheader("🌐 ดึงข้อมูลจาก NCBI")
-    ncbi_email = st.text_input("Email (จำเป็น)", placeholder="email@example.com")
-    ncbi_id = st.text_input("RefSeq ID", placeholder="เช่น NC_000913 หรือ GCF_000146045.2")
+    ncbi_email = st.text_input("Email (จำเป็นสำหรับ NCBI)", placeholder="email@example.com")
     
-    if st.button("📥 ดาวน์โหลดจาก NCBI"):
-        if not ncbi_email or not ncbi_id:
-            st.error("กรุณากรอก Email และ RefSeq ID ให้ครบถ้วน")
-        else:
-            with st.spinner(f"กำลังดาวน์โหลด {ncbi_id} (อาจใช้เวลาสักครู่)..."):
-                try:
-                    raw_data = fetch_ncbi(ncbi_id.strip(), ncbi_email.strip())
-                    if not any(item['id'] == ncbi_id for item in st.session_state['ncbi_cache']):
-                        st.session_state['ncbi_cache'].append({
-                            "id": ncbi_id.strip(),
-                            "filename": f"NCBI_{ncbi_id.strip()}.gbff",
-                            "content": raw_data
-                        })
-                    st.success(f"ดาวน์โหลด {ncbi_id} สำเร็จ!")
-                except Exception as e:
-                    st.error(f"เกิดข้อผิดพลาดในการโหลด: {e}")
+    # แบ่งแท็บการค้นหาออกเป็น 2 รูปแบบ
+    tab1, tab2 = st.tabs(["🔍 ค้นหาชื่อ", "📝 ระบุ ID โดยตรง"])
+    
+    with tab1:
+        st.write("ค้นหาชื่อสิ่งมีชีวิตในฐานข้อมูล Assembly")
+        search_query = st.text_input("พิมพ์ชื่อ (เช่น Yeast, E. coli)", key="search_q")
+        
+        if st.button("🔍 ค้นหาข้อมูล"):
+            if not ncbi_email:
+                st.warning("⚠️ กรุณากรอก Email ด้านบนก่อนทำการค้นหาครับ")
+            elif search_query:
+                with st.spinner(f"กำลังค้นหา '{search_query}'..."):
+                    try:
+                        results = search_ncbi_genomes(search_query, ncbi_email)
+                        st.session_state['ncbi_search_results'] = results
+                    except Exception as e:
+                        st.error(f"เกิดข้อผิดพลาด: {e}")
+        
+        # แสดงผลลัพธ์การค้นหาในรูปแบบ Dropdown ให้ผู้ใช้เลือก
+        if st.session_state.get('ncbi_search_results') is not None:
+            res_list = st.session_state['ncbi_search_results']
+            if len(res_list) > 0:
+                options = {r['id']: r['label'] for r in res_list}
+                selected_acc = st.selectbox("พบข้อมูล โปรดเลือกจีโนม:", options=list(options.keys()), format_func=lambda x: options[x])
+                
+                if st.button("📥 ดาวน์โหลดจีโนมที่เลือก"):
+                    with st.spinner(f"กำลังดาวน์โหลด {selected_acc}..."):
+                        try:
+                            raw_data = fetch_ncbi(selected_acc, ncbi_email)
+                            if not any(item['id'] == selected_acc for item in st.session_state['ncbi_cache']):
+                                st.session_state['ncbi_cache'].append({
+                                    "id": selected_acc,
+                                    "filename": f"NCBI_{selected_acc}.gbff",
+                                    "content": raw_data
+                                })
+                            st.success(f"ดาวน์โหลด {selected_acc} สำเร็จ!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"โหลดข้อมูลล้มเหลว: {e}")
+            else:
+                st.info("❌ ไม่พบชื่อจีโนมนี้ในฐานข้อมูล NCBI ลองใช้คำอื่นดูครับ")
+
+    with tab2:
+        st.write("ดึงข้อมูลหากทราบรหัส RefSeq / GenBank อยู่แล้ว")
+        ncbi_id = st.text_input("RefSeq ID", placeholder="เช่น NC_000913 หรือ GCF_000146045.2", key="manual_id")
+        
+        if st.button("📥 ดาวน์โหลดด้วย ID"):
+            if not ncbi_email or not ncbi_id:
+                st.error("กรุณากรอก Email และ RefSeq ID ให้ครบถ้วน")
+            else:
+                with st.spinner(f"กำลังดาวน์โหลด {ncbi_id}..."):
+                    try:
+                        raw_data = fetch_ncbi(ncbi_id.strip(), ncbi_email.strip())
+                        if not any(item['id'] == ncbi_id for item in st.session_state['ncbi_cache']):
+                            st.session_state['ncbi_cache'].append({
+                                "id": ncbi_id.strip(),
+                                "filename": f"NCBI_{ncbi_id.strip()}.gbff",
+                                "content": raw_data
+                            })
+                        st.success("ดาวน์โหลดสำเร็จ!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"เกิดข้อผิดพลาด: {e}")
                     
+    # รายการไฟล์ที่โหลดมาแล้ว
     if st.session_state['ncbi_cache']:
         st.markdown(f"*(มีข้อมูลจาก NCBI จำนวน {len(st.session_state['ncbi_cache'])} รายการ)*")
         if st.button("🗑️ ล้างข้อมูล NCBI"):
             st.session_state['ncbi_cache'] = []
+            st.session_state['ncbi_search_results'] = None
             st.rerun()
             
-    # --- ระบบอัปโหลดไฟล์เดิม ---
     st.markdown("---")
     st.subheader("📂 อัปโหลดไฟล์")
     uploaded_files = st.file_uploader(
@@ -262,13 +318,11 @@ with st.sidebar:
     st.markdown("---")
     with st.expander("วิธีการใช้งาน"):
         st.markdown("""
-        1. **เตรียมไฟล์:** ไฟล์จีโนมสกุล `.gbff` หรือใช้ RefSeq ID ดาวน์โหลดผ่านเน็ต
-        2. **ป้อน API Key:** หากต้องการใช้ระบบผู้ช่วยวิเคราะห์ AI แนะนำให้ระบุคีย์ที่แถบด้านซ้าย
-        3. **โหมดไฟล์เดียว:** คลิกเลือกแท่งโครโมโซมเพื่อดูรายละเอียดและสั่งงาน AI รายโครโมโซมได้
-        4. **โหมดเปรียบเทียบ:** เปรียบเทียบสถิติข้ามสายพันธุ์และให้ AI ช่วยสรุปความสัมพันธ์
+        1. **เตรียมไฟล์:** โหลดไฟล์ `.gbff` หรือค้นหา/ดึงจาก NCBI แบบออนไลน์
+        2. **ป้อน API Key:** หากต้องการใช้ระบบ AI แนะนำให้ระบุคีย์ที่แถบด้านซ้าย
+        3. **โหมดไฟล์เดียว:** คลิกเลือกโครโมโซมเพื่อดูรายละเอียดและสั่ง AI วิเคราะห์โครโมโซมนั้น ๆ
+        4. **โหมดเปรียบเทียบ:** นำเข้าหลายไฟล์เพื่อวิเคราะห์เชิงวิวัฒนาการ
         """)
-    
-    st.caption("Developed for High School Science Project")
 
 # ============================================
 # 4. Main Analysis Area
@@ -279,7 +333,7 @@ has_files = bool(uploaded_files)
 has_ncbi = bool(st.session_state['ncbi_cache'])
 
 if not has_files and not has_ncbi:
-    st.info("⬅️ กรุณาอัปโหลดไฟล์ .gbff หรือดึงข้อมูลจาก NCBI ที่แถบเมนูด้านซ้ายเพื่อเริ่มต้น")
+    st.info("⬅️ กรุณาอัปโหลดไฟล์ .gbff หรือ ค้นหาข้อมูลจาก NCBI ที่แถบเมนูด้านซ้ายเพื่อเริ่มต้น")
     
     cols = st.columns(3)
     with cols[0]:
@@ -480,14 +534,14 @@ else:
         else:
             st.info("⚠️ ไม่พบลำดับข้อมูลกรดอะมิโน (Translation Feature) ในไฟล์นี้")
 
-        # --- 🤖 ส่วนเสริม: ระบบวิเคราะห์และถามตอบด้วย AI รายโครโมโซม (อัปเดต Focus Prompt) ---
+        # --- 🤖 ส่วนเสริม: ระบบวิเคราะห์และถามตอบด้วย AI รายโครโมโซม ---
         st.divider()
         st.subheader("🧬 AI Biological Assistant")
         ai_col1, ai_col2 = st.columns([1, 2])
         
         with ai_col1:
             st.markdown("ระบบจะส่งสถิติของทุกโครโมโซมให้ AI เห็นภาพรวม แต่สั่งให้ AI **โฟกัสคำตอบเฉพาะโครโมโซมที่คุณเลือก** หรือตอบคำถามเฉพาะเจาะจงด้านล่าง")
-            user_question = st.text_input("💡 ถามคำถามชีววิทยาเกี่ยวกับโครโมโซมนี้", placeholder="เช่น ทำไมโครโมโซมนี้ถึงมีกรดอะมิโน Serine มากเป็นพิเศษเมื่อเทียบกับแท่งอื่น?")
+            user_question = st.text_input("💡 ถามคำถามชีววิทยาเกี่ยวกับโครโมโซมนี้", placeholder="เช่น ทำไมโครโมโซมนี้ถึงมีกรดอะมิโน Serine มากเป็นพิเศษ?")
             run_ai = st.button("✨ เริ่มการวิเคราะห์ด้วย AI")
             
         with ai_col2:
@@ -495,12 +549,10 @@ else:
                 if not api_key:
                     st.error("❌ กรุณากรอก Google API Key ที่แถบเมนูด้านซ้ายก่อนกดปุ่มวิเคราะห์ครับ")
                 else:
-                    # 1. สร้างตารางสรุปสถิติของ "ทุกโครโมโซม" เพื่อให้ AI ใช้เปรียบเทียบแนวโน้ม (Global Genome Context)
                     all_chroms_summary = ""
                     for cid, cinfo in data['chromosomes'].items():
                         all_chroms_summary += f"- โครโมโซม {cid}: ความยาว={cinfo['len']:,} bp, GC={cinfo['gc_total']:.2f}%, Non-coding={cinfo['nc_pct']:.2f}%, จำนวนโปรตีน={cinfo['total_proteins']:,} ชนิด\n"
                     
-                    # 2. ออกแบบ Prompt สั่งควบคุมโฟกัสของ AI อย่างเข้มงวด
                     prompt = f"""
                     You are an expert Bioinformatics AI Assistant. Analyze the genomic data of this organism.
                     
@@ -525,7 +577,7 @@ else:
                     
                     CRITICAL INSTRUCTION:
                     1. Focus your answer primarily on the [TARGET FOCUS] chromosome and directly answer the user's question or analyze it deeply.
-                    2. Use the [GLOBAL GENOME CONTEXT] data only to make meaningful biological comparisons (e.g., pointing out if the selected chromosome has distinct patterns like higher/lower GC or specific amino acid abundance compared to the rest of the genome).
+                    2. Use the [GLOBAL GENOME CONTEXT] data only to make meaningful biological comparisons.
                     3. Do not generalize the answer to the whole genome unless making a comparison. Keep the focus tight.
                     4. Answer in scientifically rigorous, clear, and beautiful Thai language.
                     """
