@@ -39,85 +39,85 @@ if 'ncbi_search_results' not in st.session_state:
 # ============================================
 # 2. Helper Functions (Logic)
 # ============================================
+
+def safe_ncbi_call(func, max_retries=5, is_fetch=False, **kwargs):
+    """🛡️ ฟังก์ชันเกราะป้องกัน: ครอบการทำงานของ NCBI ทุกจุดเพื่อสู้กับอาการเน็ตหลุด/เซิร์ฟเวอร์ล่ม"""
+    for attempt in range(max_retries):
+        try:
+            with func(**kwargs) as handle:
+                if is_fetch:
+                    data = handle.read()
+                    if "NCBI C++ Exception" in data or "Error: TXCLIENT" in data:
+                        raise Exception("NCBI Internal Error")
+                    return data
+                else:
+                    return Entrez.read(handle)
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(3) # พัก 3 วินาทีก่อนลองใหม่
+                continue
+            else:
+                err_msg = str(e)
+                if "IncompleteRead" in err_msg or "EOF" in err_msg:
+                    raise Exception("เซิร์ฟเวอร์ NCBI ตัดการเชื่อมต่อ (IncompleteRead/EOF) โปรดลองใหม่อีกครั้ง")
+                raise Exception(f"เกิดข้อผิดพลาดในการดึงข้อมูล: {err_msg}")
+
 def search_ncbi_genomes(query, email):
     Entrez.email = email
     search_term = f"({query}[Organism] OR {query}[All Fields]) AND \"latest refseq\"[filter]"
     
-    with Entrez.esearch(db="assembly", term=search_term, retmax=5) as handle:
-        record = Entrez.read(handle)
-        id_list = record.get("IdList", [])
+    # ใช้ Safe Wrapper ครอบ esearch และ esummary
+    record = safe_ncbi_call(Entrez.esearch, db="assembly", term=search_term, retmax=5)
+    id_list = record.get("IdList", [])
         
     if not id_list:
         return []
         
     results = []
-    with Entrez.esummary(db="assembly", id=",".join(id_list)) as handle:
-        summaries = Entrez.read(handle)
-        doc_sums = summaries.get('DocumentSummarySet', {}).get('DocumentSummary', [])
-        
-        for summary in doc_sums:
-            acc = summary.get('AssemblyAccession', '')
-            org = summary.get('SpeciesName', summary.get('Organism', 'Unknown Organism'))
-            name = summary.get('AssemblyName', '')
-            if acc:
-                results.append({"id": acc, "label": f"{org} ({acc}) - {name[:20]}..."})
+    summaries = safe_ncbi_call(Entrez.esummary, db="assembly", id=",".join(id_list))
+    doc_sums = summaries.get('DocumentSummarySet', {}).get('DocumentSummary', [])
+    
+    for summary in doc_sums:
+        acc = summary.get('AssemblyAccession', '')
+        org = summary.get('SpeciesName', summary.get('Organism', 'Unknown Organism'))
+        name = summary.get('AssemblyName', '')
+        if acc:
+            results.append({"id": acc, "label": f"{org} ({acc}) - {name[:20]}..."})
     return results
 
-def fetch_ncbi(acc_id, email, max_retries=5):
-    """ดึงข้อมูล GenBank พร้อมระบบ Safe Mode ดึงทีละ 1 ชิ้นป้องกัน NCBI ล่ม"""
+def fetch_ncbi(acc_id, email):
     Entrez.email = email
     acc_id = acc_id.strip().upper()
-    
-    def _fetch_with_retry(id_string):
-        for attempt in range(max_retries):
-            try:
-                with Entrez.efetch(db="nucleotide", id=id_string, rettype="gbwithparts", retmode="text") as handle:
-                    data = handle.read()
-                    # 💡 ดักจับกรณีที่ NCBI ส่งข้อความ Error C++ กลับมาแทนข้อมูล DNA
-                    if "NCBI C++ Exception" in data or "Error: TXCLIENT" in data:
-                        raise Exception("NCBI Internal Backend Error (C++)")
-                    return data
-            except Exception as e:
-                err_msg = str(e)
-                if attempt < max_retries - 1:
-                    time.sleep(3) # พักเซิร์ฟเวอร์ 3 วินาทีแล้วดึงใหม่
-                    continue
-                else:
-                    if "IncompleteRead" in err_msg or "EOF" in err_msg or "TXCLIENT" in err_msg:
-                        raise Exception("เซิร์ฟเวอร์ NCBI ล่มหรือตัดสายกลางคัน (EOF/Timeout) โปรดลองดาวน์โหลดใหม่อีกครั้ง")
-                    raise Exception(f"เกิดข้อผิดพลาดในการโหลดข้อมูล: {err_msg}")
 
     if acc_id.startswith("GCF_") or acc_id.startswith("GCA_"):
-        with Entrez.esearch(db="assembly", term=acc_id) as search_handle:
-            search_rec = Entrez.read(search_handle)
-            if not search_rec["IdList"]:
-                raise Exception(f"ไม่พบข้อมูลสำหรับ Assembly: {acc_id}")
-            assembly_id = search_rec["IdList"][0]
+        # ใช้ Safe Wrapper ครอบ esearch
+        search_rec = safe_ncbi_call(Entrez.esearch, db="assembly", term=acc_id)
+        if not search_rec["IdList"]:
+            raise Exception(f"ไม่พบข้อมูลสำหรับ Assembly: {acc_id}")
+        assembly_id = search_rec["IdList"][0]
         
-        with Entrez.elink(dbfrom="assembly", db="nucleotide", id=assembly_id) as link_handle:
-            link_rec = Entrez.read(link_handle)
-            if not link_rec[0].get("LinkSetDb"):
-                raise Exception(f"ไม่พบข้อมูลลำดับเบสที่เชื่อมโยงกับ Assembly: {acc_id}")
+        # ใช้ Safe Wrapper ครอบ elink
+        link_rec = safe_ncbi_call(Entrez.elink, dbfrom="assembly", db="nucleotide", id=assembly_id)
+        if not link_rec[0].get("LinkSetDb"):
+            raise Exception(f"ไม่พบข้อมูลลำดับเบสที่เชื่อมโยงกับ Assembly: {acc_id}")
+        
+        nucl_ids = [link["Id"] for link in link_rec[0]["LinkSetDb"][0]["Link"]]
+        
+        if len(nucl_ids) > 300:
+            raise Exception(f"จีโนมนี้ประกอบด้วยชิ้นส่วนถึง {len(nucl_ids)} ชิ้น แนะนำให้ดาวน์โหลดไฟล์ .gbff จากเว็บมาอัปโหลดเองครับ")
+        
+        all_data = ""
+        batch_size = 5 # ดึงทีละ 5 ชิ้นกำลังดี
+        for i in range(0, len(nucl_ids), batch_size):
+            batch_ids = nucl_ids[i:i+batch_size]
+            id_string = ",".join(batch_ids)
+            # ใช้ Safe Wrapper ครอบ efetch
+            all_data += safe_ncbi_call(Entrez.efetch, is_fetch=True, db="nucleotide", id=id_string, rettype="gbwithparts", retmode="text")
+            time.sleep(0.5)
             
-            nucl_ids = [link["Id"] for link in link_rec[0]["LinkSetDb"][0]["Link"]]
-            
-            if len(nucl_ids) > 300:
-                raise Exception(f"จีโนมนี้ประกอบด้วยชิ้นส่วนถึง {len(nucl_ids)} ชิ้น ซึ่งใหญ่เกินกว่าจะดาวน์โหลดสด แนะนำให้โหลดไฟล์ .gbff จากเว็บมาอัปโหลดเองครับ")
-            
-            all_data = ""
-            # 💡 ปรับลดเป็น Safe Mode (โหลดทีละ 1 ชิ้น) ป้องกันการเชื่อมต่อล่ม 100%
-            batch_size = 1 
-            for i in range(0, len(nucl_ids), batch_size):
-                batch_ids = nucl_ids[i:i+batch_size]
-                id_string = ",".join(batch_ids)
-                all_data += _fetch_with_retry(id_string)
-                
-                # 💡 พัก 0.4 วินาที (เพื่อให้โควตาไม่เกิน 3 ครั้งต่อวินาทีของ NCBI)
-                time.sleep(0.4)
-                
-            return all_data
+        return all_data
     else:
-        return _fetch_with_retry(acc_id)
+        return safe_ncbi_call(Entrez.efetch, is_fetch=True, db="nucleotide", id=acc_id, rettype="gbwithparts", retmode="text")
 
 @st.cache_data
 def calculate_gc(sequence):
@@ -284,7 +284,7 @@ with st.sidebar:
                 selected_acc = st.selectbox("พบข้อมูล โปรดเลือกจีโนม:", options=list(options.keys()), format_func=lambda x: options[x])
                 
                 if st.button("📥 ดาวน์โหลดจีโนมที่เลือก"):
-                    with st.spinner(f"กำลังดาวน์โหลด {selected_acc} (ทยอยโหลดทีละชิ้นแบบ Safe Mode ป้องกันเน็ตหลุด อาจใช้เวลา 1-2 นาที)..."):
+                    with st.spinner(f"กำลังดาวน์โหลดและประมวลผล {selected_acc} (ทยอยโหลดแบบปลอดภัย อาจใช้เวลาสักครู่)..."):
                         try:
                             raw_data = fetch_ncbi(selected_acc, ncbi_email)
                             if not any(item['id'] == selected_acc for item in st.session_state['ncbi_cache']):
@@ -308,7 +308,7 @@ with st.sidebar:
             if not ncbi_email or not ncbi_id:
                 st.error("กรุณากรอก Email และ RefSeq ID ให้ครบถ้วน")
             else:
-                with st.spinner(f"กำลังดาวน์โหลด {ncbi_id} (ทยอยโหลดทีละชิ้นแบบ Safe Mode ป้องกันเน็ตหลุด อาจใช้เวลา 1-2 นาที)..."):
+                with st.spinner(f"กำลังดาวน์โหลดและประมวลผล {ncbi_id} (ทยอยโหลดแบบปลอดภัย อาจใช้เวลาสักครู่)..."):
                     try:
                         raw_data = fetch_ncbi(ncbi_id.strip(), ncbi_email.strip())
                         if not any(item['id'] == ncbi_id for item in st.session_state['ncbi_cache']):
