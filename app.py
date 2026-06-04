@@ -40,9 +40,13 @@ if 'ncbi_search_results' not in st.session_state:
 # 2. Helper Functions (Logic)
 # ============================================
 def search_ncbi_genomes(query, email):
-    """ฟังก์ชันค้นหาชื่อสิ่งมีชีวิตแบบ Real-time จากฐานข้อมูล Assembly"""
+    """ฟังก์ชันค้นหาชื่อสิ่งมีชีวิตแบบ Real-time โดยบังคับหาเฉพาะเกรดมาตรฐาน (RefSeq/GCF)"""
     Entrez.email = email
-    with Entrez.esearch(db="assembly", term=f"{query}[Organism] OR {query}[All Fields]", retmax=5) as handle:
+    
+    # 💡 เพิ่มคำสั่ง "latest refseq"[filter] เพื่อบังคับให้ NCBI คัดมาเฉพาะข้อมูลระดับมาตรฐาน (GCF_)
+    search_term = f"({query}[Organism] OR {query}[All Fields]) AND \"latest refseq\"[filter]"
+    
+    with Entrez.esearch(db="assembly", term=search_term, retmax=5) as handle:
         record = Entrez.read(handle)
         id_list = record.get("IdList", [])
         
