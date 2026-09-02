@@ -505,7 +505,9 @@ else:
             
             if gc_coding and gc_nc:
                 fig2, ax2 = plt.subplots(figsize=(6, 4))
-                bp = ax2.boxplot([gc_coding, gc_nc], labels=["Coding Region", "Non-coding Region"], patch_artist=True)
+                bp = ax2.boxplot([gc_coding, gc_nc], patch_artist=True)
+                ax2.set_xticks([1, 2])
+                ax2.set_xticklabels(["Coding Region", "Non-coding Region"])
                 for box in bp['boxes']:
                     box.set(color='#34d399', linewidth=2)
                     box.set(facecolor='#065f46')
