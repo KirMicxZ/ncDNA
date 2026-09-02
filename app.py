@@ -150,7 +150,13 @@ def process_genbank(file_content, filename):
     total_gc = 0
     
     for record in records:
-        seq = str(record.seq).upper()
+        from Bio.Seq import UndefinedSequenceError
+# ... ภายใน loop for record in records:
+        try:
+            seq = str(record.seq).upper()
+        except UndefinedSequenceError:
+    # ถ้าไม่มีลำดับเบส ให้สร้างเบส N ตามความยาวของ record แทน
+    seq = "N" * len(record)
         slen = len(seq)
         total_len += slen
         total_gc += (seq.count("G") + seq.count("C"))
