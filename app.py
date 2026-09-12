@@ -151,11 +151,9 @@ def process_genbank(file_content, filename):
     
     for record in records:
         from Bio.Seq import UndefinedSequenceError
-    # ... ภายใน loop for record in records:
         try:
             seq = str(record.seq).upper()
         except UndefinedSequenceError:
-    # ถ้าไม่มีลำดับเบส ให้สร้างเบส N ตามความยาวของ record แทน
             seq = "N" * len(record)
         slen = len(seq)
         total_len += slen
@@ -255,9 +253,14 @@ with st.sidebar:
     st.markdown("ระบบวิเคราะห์และประมวลผลข้อมูลจีโนม")
     
     st.markdown("---")
-    st.subheader("⚙️ การตั้งค่าปัญญาประดิษฐ์ (AI)")
-    api_key = st.text_input("Google API Key", type="password", help="โปรดระบุ API Key จาก Google AI Studio เพื่อเปิดใช้งานระบบวิเคราะห์เชิงลึก")
-    
+    with st.expander("📖 คู่มือการใช้งานระบบ"):
+        st.markdown("""
+        1. **การนำเข้าข้อมูล:** อัปโหลดไฟล์รูปแบบ `.gbff` หรือสืบค้นจากฐานข้อมูล NCBI ทางแถบเมนูด้านซ้าย
+        2. **การตั้งค่าความสามารถขั้นสูง:** ระบุ API Key เพื่อเปิดใช้งานระบบผู้ช่วยวิเคราะห์ทางชีววิทยาด้วย AI
+        3. **โหมดวิเคราะห์เดี่ยว:** เลือกโครโมโซมบนแผนภาพเพื่อประเมินค่าทางสถิติและวิเคราะห์ข้อมูลเชิงลึกเฉพาะส่วน
+        4. **โหมดเปรียบเทียบ:** นำเข้าข้อมูลสิ่งมีชีวิตหลายชนิดเพื่อวิเคราะห์ความสัมพันธ์และสร้างรายงานเปรียบเทียบ
+        """)
+        
     st.markdown("---")
     st.subheader("🌐 ระบบสืบค้นฐานข้อมูล NCBI")
     ncbi_email = st.text_input("อีเมล (บังคับสำหรับการเข้าถึง NCBI)", placeholder="email@example.com")
@@ -338,15 +341,10 @@ with st.sidebar:
         type=["gbff"], 
         accept_multiple_files=True
     )
-
+    
     st.markdown("---")
-    with st.expander("📖 คู่มือการใช้งานระบบ"):
-        st.markdown("""
-        1. **การนำเข้าข้อมูล:** อัปโหลดไฟล์รูปแบบ `.gbff` หรือสืบค้นจากฐานข้อมูล NCBI ทางแถบเมนูด้านซ้าย
-        2. **การตั้งค่าความสามารถขั้นสูง:** ระบุ API Key เพื่อเปิดใช้งานระบบผู้ช่วยวิเคราะห์ทางชีววิทยาด้วย AI
-        3. **โหมดวิเคราะห์เดี่ยว:** เลือกโครโมโซมบนแผนภาพเพื่อประเมินค่าทางสถิติและวิเคราะห์ข้อมูลเชิงลึกเฉพาะส่วน
-        4. **โหมดเปรียบเทียบ:** นำเข้าข้อมูลสิ่งมีชีวิตหลายชนิดเพื่อวิเคราะห์ความสัมพันธ์และสร้างรายงานเปรียบเทียบ
-        """)
+    st.subheader("⚙️ การตั้งค่าปัญญาประดิษฐ์ (AI)")
+    api_key = st.text_input("Google API Key", type="password", help="โปรดระบุ API Key จาก Google AI Studio เพื่อเปิดใช้งานระบบวิเคราะห์เชิงลึก")
 
 # ============================================
 # 4. Main Analysis Area
