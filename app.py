@@ -586,24 +586,29 @@ else:
             # แปลงตำแหน่ง Base Pair ให้เป็นมุม 0 - 360 องศา
             polar_df_plot['Angle'] = (polar_df_plot['Position'] / c_data['len']) * 360
             
-            fig_polar = px.line_polar(
-                polar_df_plot, 
-                r="GC", 
-                theta="Angle", 
-                template="plotly_dark", 
-                color_discrete_sequence=['#F43F5E']
-            )
+            # ใช้ go.Scatterpolar โดยตรงเพื่อข้ามปัญหาของ px.line_polar บน Streamlit Cloud
+            fig_polar = go.Figure()
+            fig_polar.add_trace(go.Scatterpolar(
+                r=polar_df_plot['GC'],
+                theta=polar_df_plot['Angle'],
+                mode='lines',
+                line=dict(color='#F43F5E', width=2),
+                name='GC Content'
+            ))
+            
             fig_polar.update_layout(
+                template="plotly_dark",
                 height=450,
                 polar=dict(
                     angularaxis=dict(
-                        direction="clockwise",  
-                        rotation=90,            
+                        direction="clockwise",  # หมุนตามเข็มนาฬิกา
+                        rotation=90,            # เริ่มจุดแรกที่ด้านบนสุด (12 นาฬิกา)
                         tickmode='array',
                         tickvals=[0, 90, 180, 270],
                         ticktext=['0%', '25%', '50%', '75%']
                     )
-                )
+                ),
+                showlegend=False
             )
             st.plotly_chart(fig_polar, use_container_width=True)
         else:
