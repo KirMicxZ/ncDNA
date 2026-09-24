@@ -492,8 +492,39 @@ else:
         m4.metric("Non-coding Ratio", f"{data['nc_pct']:.2f}%")
         
         chrom_ids = list(data['chromosomes'].keys())
-        selected_chrom_id = st.selectbox("Select Sequence / Chromosome", chrom_ids)
-        c_data = data['chromosomes'][selected_chrom_id]
+        
+        # เพิ่มตัวเลือก "All Chromosomes (Combined)" เมื่อสิ่งมีชีวิตนั้นมีหลายโครโมโซม
+        chrom_options = ["All Chromosomes (Combined)"] + chrom_ids if len(chrom_ids) > 1 else chrom_ids
+        selected_chrom_id = st.selectbox("Select Sequence / Chromosome", chrom_options)
+        
+        # จัดเตรียมข้อมูลสำหรับวิเคราะห์แบบรวมทุกโครโมโซม หรือเลือกโครโมโซมเดียว
+        if selected_chrom_id == "All Chromosomes (Combined)":
+            combined_seq = "".join([c['seq'] for c in data['chromosomes'].values()])
+            combined_cds_seqs = [cds for c in data['chromosomes'].values() for cds in c['cds_seqs']]
+            combined_features = []
+            
+            offset = 0
+            for cid, cinfo in data['chromosomes'].items():
+                for f in cinfo['features']:
+                    f_copy = f.copy()
+                    f_copy['start'] += offset
+                    f_copy['end'] += offset
+                    f_copy['chrom'] = cid
+                    combined_features.append(f_copy)
+                offset += cinfo['len']
+            
+            c_data = {
+                'id': 'ALL',
+                'desc': 'All Chromosomes Combined',
+                'len': len(combined_seq),
+                'seq': combined_seq,
+                'features': combined_features,
+                'cds_seqs': combined_cds_seqs,
+                'is_combined': True
+            }
+        else:
+            c_data = data['chromosomes'][selected_chrom_id]
+            c_data['is_combined'] = False
         
         st.markdown("---")
         st.markdown("### 1. Interactive Genome & Feature Track Browser")
@@ -507,7 +538,7 @@ else:
             # Draw baseline chromosome line
             fig_track.add_trace(go.Scatter(
                 x=[0, c_data['len']], y=[0, 0], mode='lines',
-                line=dict(color='#6B7280', width=4), hoverinfo='none', name='Chromosome'
+                line=dict(color='#6B7280', width=4), hoverinfo='none', name='Genome'
             ))
             
             # Plot top 200 features to prevent lag
@@ -515,11 +546,12 @@ else:
             for idx, row in feat_subset.iterrows():
                 y_pos = 1 if row['strand'] == 1 else -1
                 color = '#10B981' if row['type'] == 'CDS' else '#F59E0B'
+                chrom_label = f"<br>Chr: {row['chrom']}" if 'chrom' in row else ""
                 fig_track.add_trace(go.Scatter(
                     x=[row['start'], row['end']], y=[y_pos, y_pos],
                     mode='lines+markers', line=dict(color=color, width=8),
                     name=row['type'],
-                    hovertemplate=f"Feature: {row['name']}<br>Type: {row['type']}<br>Span: {row['start']:,} - {row['end']:,} bp<extra></extra>"
+                    hovertemplate=f"Feature: {row['name']}<br>Type: {row['type']}{chrom_label}<br>Span: {row['start']:,} - {row['end']:,} bp<extra></extra>"
                 ))
             
             fig_track.update_layout(
@@ -534,7 +566,7 @@ else:
 
         # GC Content & GC Skew Sliding Window
         st.markdown("### 2. GC Content & GC Skew Sliding Window")
-        win_size = st.slider("Window Size (bp)", min_value=500, max_value=20000, value=2000, step=500)
+        win_size = st.slider("Window Size (bp)", min_value=500, max_value=50000, value=2000, step=500)
         
         seq = c_data['seq']
         positions, gc_vals, skew_vals = [], [], []
@@ -565,9 +597,19 @@ else:
             st.markdown("### 4. Open Reading Frame (ORF) Finder")
             min_len = st.number_input("Min Protein Length (aa)", min_value=30, value=100, step=10)
             if st.button("Scan ORFs"):
-                orfs_df = find_orfs(c_data['seq'], min_aa_len=min_len)
-                st.write(f"Found {len(orfs_df)} predicted ORFs")
-                st.dataframe(orfs_df.head(10), use_container_width=True)
+                if c_data['is_combined']:
+                    all_orfs = []
+                    for cid, cinfo in data['chromosomes'].items():
+                        df_o = find_orfs(cinfo['seq'], min_aa_len=min_len)
+                        if not df_o.empty:
+                            df_o.insert(0, 'Chromosome', cid)
+                            all_orfs.append(df_o)
+                    orfs_df = pd.concat(all_orfs, ignore_index=True) if all_orfs else pd.DataFrame()
+                else:
+                    orfs_df = find_orfs(c_data['seq'], min_aa_len=min_len)
+                
+                st.write(f"Found {len(orfs_df)} predicted ORFs across selected sequence(s)")
+                st.dataframe(orfs_df.head(15), use_container_width=True)
 
         with col_rscu:
             st.markdown("### 5. Codon Usage Bias (RSCU)")
@@ -585,7 +627,6 @@ else:
         blast_seq = c_data['seq'][:500] # First 500 bp
         blast_url = f"https://blast.ncbi.nlm.nih.gov/Blast.cgi?QUERY={urllib.parse.quote(blast_seq)}&PROGRAM=blastn&DATABASE=nr&CMD=Put"
         st.markdown(f'<a href="{blast_url}" target="_blank"><button style="padding:10px; background-color:#2563EB; color:white; border-radius:8px; border:none; cursor:pointer;">🚀 Send First 500bp to NCBI BLASTn</button></a>', unsafe_allow_html=True)
-
     # ============================================
     # TAB 2: Comparative Genomics & Synteny
     # ============================================
