@@ -1,47 +1,167 @@
 import streamlit as st
-from Bio import SeqIO, Entrez  
+from Bio import SeqIO, Entrez
+from Bio.Seq import Seq
+from Bio.Seq import UndefinedSequenceError
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import io
 import plotly.express as px
-import plotly.graph_objects as go  
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import re
-import google.generativeai as genai  
-import time  
+import google.generativeai as genai
+import time
+import json
+import urllib.parse
+from scipy.cluster.hierarchy import linkage, dendrogram
 
 # ============================================
-# 1. Page Configuration & UI Setup
+# 1. Page Configuration & Custom CSS
 # ============================================
-st.set_page_config(page_title="Genome Analyzer", layout="wide")
+st.set_page_config(page_title="Genome Analyzer Pro", layout="wide", page_icon="🧬")
 
 plt.style.use('dark_background')
 
 st.markdown("""
 <style>
-    .stApp { background-color: #262730; color: #FFFFFF; }
-    [data-testid="stSidebar"] { background-color: #1E1E1E; }
-    h1, h2, h3, .main-header { color: #FFFFFF !important; font-family: 'Helvetica', sans-serif; }
-    .sub-header { color: #A3A3A3 !important; font-size: 1.1rem; }
-    [data-testid="stMetricValue"] { color: #4ADE80 !important; } 
+    .stApp { background-color: #111827; color: #F9FAFB; }
+    [data-testid="stSidebar"] { background-color: #1F2937; }
+    h1, h2, h3, .main-header { color: #FFFFFF !important; font-family: 'Inter', sans-serif; }
+    .sub-header { color: #9CA3AF !important; font-size: 1.1rem; }
+    [data-testid="stMetricValue"] { color: #10B981 !important; font-weight: bold; } 
     [data-testid="stMetricLabel"] { color: #D1D5DB !important; }
-    [data-testid="stDataFrame"] { background-color: #262730; }
-    .stButton button { width: 100%; border-radius: 8px; }
+    .stButton button { width: 100%; border-radius: 8px; background-color: #374151; color: white; border: none; }
+    .stButton button:hover { background-color: #4B5563; }
+    .chat-bubble-user { background-color: #1E3A8A; padding: 10px 14px; border-radius: 12px; margin-bottom: 8px; }
+    .chat-bubble-ai { background-color: #374151; padding: 10px 14px; border-radius: 12px; margin-bottom: 8px; }
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize Session State
+# Initialize Session States
 if 'ncbi_cache' not in st.session_state:
     st.session_state['ncbi_cache'] = []
 if 'ncbi_search_results' not in st.session_state:
     st.session_state['ncbi_search_results'] = None
+if 'chat_history' not in st.session_state:
+    st.session_state['chat_history'] = []
 
 # ============================================
-# 2. Helper Functions (Logic)
+# 2. Advanced Bioinformatic Logic & Calculations
 # ============================================
+
+def calculate_gc(sequence):
+    if not sequence: return 0
+    return (sequence.count("G") + sequence.count("C")) / len(sequence) * 100
+
+def calculate_gc_skew(sequence):
+    if not sequence: return 0
+    g = sequence.count("G")
+    c = sequence.count("C")
+    if (g + c) == 0: return 0
+    return (g - c) / (g + c)
+
+def find_orfs(sequence, min_aa_len=100):
+    seq_obj = Seq(sequence)
+    seq_len = len(sequence)
+    orfs = []
+    
+    # 6 Reading Frames
+    frames = []
+    for frame in range(3):
+        frames.append((frame, str(seq_obj[frame:]), "+"))
+    rc_seq = str(seq_obj.reverse_complement())
+    for frame in range(3):
+        frames.append((frame, rc_seq[frame:], "-"))
+        
+    start_codon = "ATG"
+    stop_codons = {"TAA", "TAG", "TGA"}
+
+    for frame_idx, frame_seq, strand in frames:
+        i = 0
+        while i < len(frame_seq) - 2:
+            codon = frame_seq[i:i+3]
+            if codon == start_codon:
+                for j in range(i + 3, len(frame_seq) - 2, 3):
+                    stop = frame_seq[j:j+3]
+                    if stop in stop_codons:
+                        aa_len = (j + 3 - i) // 3
+                        if aa_len >= min_aa_len:
+                            if strand == "+":
+                                start_pos = frame_idx + i
+                                end_pos = frame_idx + j + 3
+                            else:
+                                start_pos = seq_len - (frame_idx + j + 3)
+                                end_pos = seq_len - (frame_idx + i)
+                            orfs.append({
+                                "Strand": strand,
+                                "Start": start_pos,
+                                "End": end_pos,
+                                "Length (bp)": end_pos - start_pos,
+                                "Protein Length (aa)": aa_len,
+                                "Frame": frame_idx + 1
+                            })
+                        break
+            i += 3
+    return pd.DataFrame(orfs)
+
+def calculate_rscu(cds_sequences):
+    codon_counts = {}
+    synonymous_codons = {
+        'A': ['GCT', 'GCC', 'GCA', 'GCG'],
+        'C': ['TGT', 'TGC'],
+        'D': ['GAT', 'GAC'],
+        'E': ['GAA', 'GAG'],
+        'F': ['TTT', 'TTC'],
+        'G': ['GGT', 'GGC', 'GGA', 'GGG'],
+        'H': ['CAT', 'CAC'],
+        'I': ['ATT', 'ATC', 'ATA'],
+        'K': ['AAA', 'AAG'],
+        'L': ['TTA', 'TTG', 'CTT', 'CTC', 'CTA', 'CTG'],
+        'M': ['ATG'],
+        'N': ['AAT', 'AAC'],
+        'P': ['CCT', 'CCC', 'CCA', 'CCG'],
+        'Q': ['CAA', 'CAG'],
+        'R': ['CGT', 'CGC', 'CGA', 'CGG', 'AGA', 'AGG'],
+        'S': ['TCT', 'TCC', 'TCA', 'TCG', 'AGT', 'AGC'],
+        'T': ['ACT', 'ACC', 'ACA', 'ACG'],
+        'V': ['GTT', 'GTC', 'GTA', 'GTG'],
+        'W': ['TGG'],
+        'Y': ['TAT', 'TAC']
+    }
+    
+    for aa, codons in synonymous_codons.items():
+        for c in codons: codon_counts[c] = 0
+
+    total_codons = 0
+    for seq in cds_sequences:
+        for i in range(0, len(seq) - 2, 3):
+            codon = seq[i:i+3].upper()
+            if codon in codon_counts:
+                codon_counts[codon] += 1
+                total_codons += 1
+
+    rscu_data = []
+    for aa, codons in synonymous_codons.items():
+        n_i = len(codons)
+        total_aa_count = sum(codon_counts[c] for c in codons)
+        for c in codons:
+            count = codon_counts[c]
+            rscu = (count / (total_aa_count / n_i)) if total_aa_count > 0 else 0
+            rscu_data.append({"Amino Acid": aa, "Codon": c, "Count": count, "RSCU": round(rscu, 3)})
+
+    return pd.DataFrame(rscu_data)
+
+def generate_kmer_profile(seq, k=3):
+    kmers = {}
+    for i in range(len(seq) - k + 1):
+        kmer = seq[i:i+k]
+        if "N" not in kmer:
+            kmers[kmer] = kmers.get(kmer, 0) + 1
+    total = sum(kmers.values())
+    return {kmer: count/total for kmer, count in kmers.items()} if total > 0 else {}
 
 def safe_ncbi_call(func, max_retries=5, is_fetch=False, **kwargs):
-    """Wrapper function for NCBI requests to handle connection dropouts and server errors."""
     for attempt in range(max_retries):
         try:
             with func(**kwargs) as handle:
@@ -54,35 +174,10 @@ def safe_ncbi_call(func, max_retries=5, is_fetch=False, **kwargs):
                     return Entrez.read(handle)
         except Exception as e:
             if attempt < max_retries - 1:
-                time.sleep(3) 
+                time.sleep(2)
                 continue
             else:
-                err_msg = str(e)
-                if "IncompleteRead" in err_msg or "EOF" in err_msg:
-                    raise Exception("NCBI server disconnected (IncompleteRead/EOF). Please try again.")
-                raise Exception(f"Error fetching data: {err_msg}")
-
-def search_ncbi_genomes(query, email):
-    Entrez.email = email
-    search_term = f"({query}[Organism] OR {query}[All Fields]) AND \"latest refseq\"[filter]"
-    
-    record = safe_ncbi_call(Entrez.esearch, db="assembly", term=search_term, retmax=5)
-    id_list = record.get("IdList", [])
-        
-    if not id_list:
-        return []
-        
-    results = []
-    summaries = safe_ncbi_call(Entrez.esummary, db="assembly", id=",".join(id_list))
-    doc_sums = summaries.get('DocumentSummarySet', {}).get('DocumentSummary', [])
-    
-    for summary in doc_sums:
-        acc = summary.get('AssemblyAccession', '')
-        org = summary.get('SpeciesName', summary.get('Organism', 'Unknown Organism'))
-        name = summary.get('AssemblyName', '')
-        if acc:
-            results.append({"id": acc, "label": f"{org} ({acc}) - {name[:20]}..."})
-    return results
+                raise Exception(f"Error fetching NCBI data: {str(e)}")
 
 def fetch_ncbi(acc_id, email):
     Entrez.email = email
@@ -93,56 +188,39 @@ def fetch_ncbi(acc_id, email):
         if not search_rec["IdList"]:
             raise Exception(f"Assembly not found: {acc_id}")
         assembly_id = search_rec["IdList"][0]
-        
         link_rec = safe_ncbi_call(Entrez.elink, dbfrom="assembly", db="nucleotide", id=assembly_id)
         if not link_rec[0].get("LinkSetDb"):
             raise Exception(f"No nucleotide data linked to Assembly: {acc_id}")
-        
         nucl_ids = [link["Id"] for link in link_rec[0]["LinkSetDb"][0]["Link"]]
-        
-        if len(nucl_ids) > 300:
-            raise Exception(f"Detected {len(nucl_ids)} genome segments, exceeding temporary connection limits. Please download the .gbff file directly from the NCBI website for analysis.")
         
         all_data = ""
         batch_size = 5 
-        for i in range(0, len(nucl_ids), batch_size):
+        for i in range(0, min(len(nucl_ids), 20), batch_size):
             batch_ids = nucl_ids[i:i+batch_size]
             id_string = ",".join(batch_ids)
             all_data += safe_ncbi_call(Entrez.efetch, is_fetch=True, db="nucleotide", id=id_string, rettype="gbwithparts", retmode="text")
             time.sleep(0.5)
-            
         return all_data
     else:
         return safe_ncbi_call(Entrez.efetch, is_fetch=True, db="nucleotide", id=acc_id, rettype="gbwithparts", retmode="text")
 
-@st.cache_data
-def calculate_gc(sequence):
-    if not sequence: return 0
-    return (sequence.count("G") + sequence.count("C")) / len(sequence) * 100
-
-def find_simple_repeats(seq, motif="AT", threshold=5):
-    if not seq: return 0
-    pattern = f"({motif}){{{threshold},}}"
-    matches = [m.group(0) for m in re.finditer(pattern, seq)]
-    return len(matches)
-
-def process_genbank(file_content, filename):
+def parse_file_content(file_content, filename):
+    records = []
+    file_type = "genbank"
+    
+    if filename.endswith(".fasta") or filename.endswith(".fa"):
+        file_type = "fasta"
+    
     try:
-        records = list(SeqIO.parse(io.StringIO(file_content), "genbank"))
-        if not records: return None, "No records found in file"
+        records = list(SeqIO.parse(io.StringIO(file_content), file_type))
+        if not records and file_type == "genbank":
+            records = list(SeqIO.parse(io.StringIO(file_content), "fasta"))
+            file_type = "fasta"
     except Exception as e:
-        return None, f"Error reading {filename}: {e}"
+        return None, f"Error parsing {filename}: {str(e)}"
 
-    seen_short_names = set()
-    filtered_records = []
-    for record in records:
-        match = re.search(r'chromosome\s+([A-Za-z0-9]+)', record.description, re.IGNORECASE)
-        short_name = match.group(1).upper() if match else record.id
-        
-        if short_name in seen_short_names: continue 
-        seen_short_names.add(short_name)
-        filtered_records.append(record)
-    records = filtered_records
+    if not records:
+        return None, f"No sequences found in {filename}"
 
     chromosomes_data = {}
     total_len = 0
@@ -150,23 +228,39 @@ def process_genbank(file_content, filename):
     total_gc = 0
     
     for record in records:
-        from Bio.Seq import UndefinedSequenceError
         try:
             seq = str(record.seq).upper()
         except UndefinedSequenceError:
             seq = "N" * len(record)
+        
         slen = len(seq)
         total_len += slen
         total_gc += (seq.count("G") + seq.count("C"))
         
         cds_regions = []
+        features_list = []
         protein_seqs = []  
-        for f in record.features:
-            if f.type == "CDS":
-                cds_regions.append((int(f.location.start), int(f.location.end)))
-                if 'translation' in f.qualifiers:
-                    protein_seqs.append(f.qualifiers['translation'][0].upper())
-                    
+        cds_sequences = []
+
+        if file_type == "genbank":
+            for f in record.features:
+                feat_type = f.type
+                start, end = int(f.location.start), int(f.location.end)
+                strand = f.location.strand
+                gene_name = f.qualifiers.get('gene', f.qualifiers.get('locus_tag', [feat_type]))[0]
+                
+                features_list.append({
+                    "type": feat_type, "start": start, "end": end, 
+                    "strand": strand, "name": gene_name
+                })
+                
+                if feat_type == "CDS":
+                    cds_regions.append((start, end))
+                    cds_seq = seq[start:end]
+                    cds_sequences.append(cds_seq)
+                    if 'translation' in f.qualifiers:
+                        protein_seqs.append(f.qualifiers['translation'][0].upper())
+        
         cds_regions.sort()
         coding_len = sum(e - s for s, e in cds_regions)
         total_coding_len += coding_len
@@ -181,46 +275,28 @@ def process_genbank(file_content, filename):
             prev = e
         if prev < slen: intergenic_seqs.append(seq[prev:slen])
 
-        all_proteins_combined = "".join(protein_seqs)
+        all_proteins = "".join(protein_seqs)
         aa_list = list("ACDEFGHIKLMNPQRSTVWY")
-        aa_dist = {aa: all_proteins_combined.count(aa) for aa in aa_list} if all_proteins_combined else {}
+        aa_dist = {aa: all_proteins.count(aa) for aa in aa_list} if all_proteins else {}
 
         chromosomes_data[record.id] = {
             "id": record.id,
             "desc": record.description,
             "len": slen,
             "seq": seq,
+            "features": features_list,
             "cds_regions": cds_regions,
+            "cds_seqs": cds_sequences,
             "coding_pct": coding_pct,
             "nc_pct": nc_pct,
             "intergenic_seqs": intergenic_seqs,
             "gc_total": calculate_gc(seq),
-            "aa_dist": aa_dist, 
-            "total_proteins": len(protein_seqs)
+            "gc_skew": calculate_gc_skew(seq),
+            "aa_dist": aa_dist,
+            "total_proteins": len(protein_seqs),
+            "kmer_profile": generate_kmer_profile(seq, k=3)
         }
 
-    def roman_to_int(roman_str):
-        roman_dict = {'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000}
-        res = 0
-        for i in range(len(roman_str)):
-            if i + 1 < len(roman_str) and roman_dict.get(roman_str[i], 0) < roman_dict.get(roman_str[i+1], 0):
-                res -= roman_dict.get(roman_str[i], 0)
-            else:
-                res += roman_dict.get(roman_str[i], 0)
-        return res
-
-    def chrom_key(item):
-        cinfo = item[1]
-        match = re.search(r'chromosome\s+([A-Za-z0-9]+)', cinfo['desc'], re.IGNORECASE)
-        if match:
-            val = match.group(1).upper()
-            if val.isdigit(): return (0, int(val), val) 
-            if re.match(r'^M{0,4}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$', val) and val != "":
-                return (0, roman_to_int(val), val) 
-            return (1, 0, val) 
-        return (2, 0, item[0]) 
-
-    chromosomes_data = dict(sorted(chromosomes_data.items(), key=chrom_key))
     overall_coding_pct = (total_coding_len / total_len) * 100 if total_len > 0 else 0
     
     return {
@@ -235,531 +311,358 @@ def process_genbank(file_content, filename):
     }, None
 
 def get_ai_response(api_key, prompt):
-    if not api_key: return "Please enter your Google API Key in the left sidebar to enable analysis."
+    if not api_key: return "Please enter your Google API Key in the left sidebar."
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-2.5-flash') 
-        with st.spinner('Processing bioinformatics analysis...'):
-            response = model.generate_content(prompt)
+        response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        return f"Error connecting to AI system: {str(e)}"
+        return f"AI Error: {str(e)}"
 
 # ============================================
-# 3. Sidebar: Inputs & Instructions
+# 3. Sidebar: Input & File Controls
 # ============================================
 with st.sidebar:
-    st.title("Genome Analyzer")
-    st.markdown("Genome Data Analysis & Processing System")
-    
+    st.title("🧬 Genome Pro")
+    st.caption("Advanced Bioinformatics & AI Suite")
     st.markdown("---")
-    with st.expander("User Guide"):
-        st.markdown("""
-        1. **Data Import:** Upload a `.gbff` file or search the NCBI database via the left sidebar.
-        2. **Advanced Settings:** Enter an API key to enable the AI biological analysis assistant.
-        3. **Single Analysis Mode:** Select a chromosome on the chart to view statistical metrics and detailed analysis.
-        4. **Comparative Mode:** Import data for multiple organisms to analyze relationships and generate comparative reports.
-        """)
-        
-    st.markdown("---")
-    st.subheader("NCBI Database Search")
-    ncbi_email = st.text_input("Email (Required for NCBI access)", placeholder="email@example.com")
     
-    tab1, tab2 = st.tabs(["Search by Name", "Search by Accession"])
+    st.subheader("1. NCBI Database Import")
+    ncbi_email = st.text_input("Email (Required)", placeholder="researcher@lab.org")
     
-    with tab1:
-        st.write("Search genome data from Assembly database")
-        search_query = st.text_input("Enter scientific name (e.g., Yeast, E. coli)", key="search_q")
-        
-        if st.button("Search"):
-            if not ncbi_email:
-                st.warning("Please enter an email before searching.")
-            elif search_query:
-                with st.spinner(f"Searching for '{search_query}'..."):
+    tab_s1, tab_s2 = st.tabs(["Search Organism", "Accession ID"])
+    with tab_s1:
+        s_query = st.text_input("Organism Name", placeholder="e.g., Escherichia coli")
+        if st.button("Search NCBI"):
+            if ncbi_email and s_query:
+                with st.spinner("Searching NCBI..."):
                     try:
-                        results = search_ncbi_genomes(search_query, ncbi_email)
-                        st.session_state['ncbi_search_results'] = results
-                    except Exception as e:
-                        st.error(f"Search error: {e}")
+                        Entrez.email = ncbi_email
+                        rec = safe_ncbi_call(Entrez.esearch, db="assembly", term=f"{s_query}[Organism] AND \"latest refseq\"[filter]", retmax=5)
+                        ids = rec.get("IdList", [])
+                        if ids:
+                            sums = safe_ncbi_call(Entrez.esummary, db="assembly", id=",".join(ids))
+                            doc_sums = sums.get('DocumentSummarySet', {}).get('DocumentSummary', [])
+                            st.session_state['ncbi_search_results'] = [
+                                {"id": d.get('AssemblyAccession'), "label": f"{d.get('SpeciesName')} ({d.get('AssemblyAccession')})"}
+                                for d in doc_sums
+                            ]
+                    except Exception as e: st.error(str(e))
         
-        if st.session_state.get('ncbi_search_results') is not None:
-            res_list = st.session_state['ncbi_search_results']
-            if len(res_list) > 0:
-                options = {r['id']: r['label'] for r in res_list}
-                selected_acc = st.selectbox("Search results - Select a genome:", options=list(options.keys()), format_func=lambda x: options[x])
-                
-                if st.button("Import Genome Data"):
-                    with st.spinner(f"Importing and processing accession {selected_acc} (may take a moment due to server rate limits)..."):
-                        try:
-                            raw_data = fetch_ncbi(selected_acc, ncbi_email)
-                            if not any(item['id'] == selected_acc for item in st.session_state['ncbi_cache']):
-                                st.session_state['ncbi_cache'].append({
-                                    "id": selected_acc,
-                                    "filename": f"NCBI_{selected_acc}.gbff",
-                                    "content": raw_data
-                                })
-                            st.success(f"Successfully imported {selected_acc}!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(str(e))
-            else:
-                st.info("No matching genome data found in database. Please check spelling.")
-
-    with tab2:
-        st.write("Search via RefSeq or GenBank Accession ID")
-        ncbi_id = st.text_input("Accession ID", placeholder="e.g., NC_000913 or GCF_000146045.2", key="manual_id")
-        
-        if st.button("Import by Accession ID"):
-            if not ncbi_email or not ncbi_id:
-                st.error("Please provide both email and Accession ID.")
-            else:
-                with st.spinner(f"Importing and processing accession {ncbi_id} (may take a moment)..."):
+        if st.session_state.get('ncbi_search_results'):
+            opts = {x['id']: x['label'] for x in st.session_state['ncbi_search_results']}
+            sel_acc = st.selectbox("Select Result", list(opts.keys()), format_func=lambda x: opts[x])
+            if st.button("Import Selected Genome"):
+                with st.spinner(f"Fetching {sel_acc}..."):
                     try:
-                        raw_data = fetch_ncbi(ncbi_id.strip(), ncbi_email.strip())
-                        if not any(item['id'] == ncbi_id for item in st.session_state['ncbi_cache']):
-                            st.session_state['ncbi_cache'].append({
-                                "id": ncbi_id.strip(),
-                                "filename": f"NCBI_{ncbi_id.strip()}.gbff",
-                                "content": raw_data
-                            })
-                        st.success("Import successful!")
+                        raw = fetch_ncbi(sel_acc, ncbi_email)
+                        st.session_state['ncbi_cache'].append({"id": sel_acc, "filename": f"{sel_acc}.gbff", "content": raw})
+                        st.success("Successfully imported!")
                         st.rerun()
-                    except Exception as e:
-                        st.error(str(e))
-                    
-    if st.session_state['ncbi_cache']:
-        st.markdown(f"*(Current NCBI data: {len(st.session_state['ncbi_cache'])} item(s))*")
-        if st.button("Clear Cached Data"):
-            st.session_state['ncbi_cache'] = []
-            st.session_state['ncbi_search_results'] = None
-            st.rerun()
-            
+                    except Exception as e: st.error(str(e))
+
+    with tab_s2:
+        acc_manual = st.text_input("Accession Code", placeholder="e.g., NC_000913")
+        if st.button("Fetch Code"):
+            if ncbi_email and acc_manual:
+                with st.spinner("Fetching NCBI..."):
+                    try:
+                        raw = fetch_ncbi(acc_manual, ncbi_email)
+                        st.session_state['ncbi_cache'].append({"id": acc_manual, "filename": f"{acc_manual}.gbff", "content": raw})
+                        st.success("Loaded!")
+                        st.rerun()
+                    except Exception as e: st.error(str(e))
+
     st.markdown("---")
-    st.subheader("Upload Data Files")
-    uploaded_files = st.file_uploader(
-        "Supported format: .gbff only", 
-        type=["gbff"], 
-        accept_multiple_files=True
-    )
+    st.subheader("2. Upload Files")
+    uploaded_files = st.file_uploader("Upload .gbff, .gb, .fasta, .fa files", type=["gbff", "gb", "gbk", "fasta", "fa"], accept_multiple_files=True)
     
     st.markdown("---")
-    st.subheader("AI Configuration")
-    api_key = st.text_input("Google API Key", type="password", help="Enter Google AI Studio API Key to enable deep analysis features.")
+    st.subheader("3. AI Key Configuration")
+    api_key = st.text_input("Google AI Studio Key", type="password")
 
 # ============================================
-# 4. Main Analysis Area
+# 4. Main Application Interface
 # ============================================
-st.markdown('<h1 class="main-header">Genome Analysis Dashboard</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-header">Genome Analysis & AI Workspace</h1>', unsafe_allow_html=True)
 
 has_files = bool(uploaded_files)
 has_ncbi = bool(st.session_state['ncbi_cache'])
 
 if not has_files and not has_ncbi:
-    st.info("Please upload a .gbff file or search NCBI using the left sidebar to begin analysis.")
-    
-    cols = st.columns(3)
-    with cols[0]:
-        st.markdown("### Deep Analysis")
-        st.write("Detailed analysis of gene structures and non-coding DNA regions.")
-    with cols[1]:
-        st.markdown("### Data Comparison")
-        st.write("Comparative statistical evaluation across species.")
-    with cols[2]:
-        st.markdown("### Export & AI Assistant")
-        st.write("Export sequence data and generate AI-driven analytical reports.")
-
+    st.info("👈 Please upload genome data files or search NCBI in the sidebar to start analysis.")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Linear Feature Tracks", "Active")
+    c2.metric("GC Skew & Codon RSCU", "Active")
+    c3.metric("AI Multi-turn Chatbot", "Ready")
 else:
     results = []
     errors = []
     
-    with st.spinner('Processing genome data...'):
+    with st.spinner('Parsing biological sequences...'):
         if has_files:
-            for uploaded_file in uploaded_files:
-                content = uploaded_file.getvalue().decode("utf-8")
-                data, err = process_genbank(content, uploaded_file.name)
+            for uf in uploaded_files:
+                content = uf.getvalue().decode("utf-8", errors="ignore")
+                data, err = parse_file_content(content, uf.name)
                 if data: results.append(data)
                 else: errors.append(err)
-        
         if has_ncbi:
             for item in st.session_state['ncbi_cache']:
-                data, err = process_genbank(item['content'], item['filename'])
+                data, err = parse_file_content(item['content'], item['filename'])
                 if data: results.append(data)
                 else: errors.append(err)
 
     if errors:
         for e in errors: st.error(e)
 
+    # Workspace Navigation Tabs
+    tab_single, tab_comp, tab_ai, tab_export = st.tabs([
+        "🔬 Single Genome Analysis", 
+        "📊 Comparative Genomics & Synteny", 
+        "🤖 AI Interactive Assistant", 
+        "📥 Data & Report Export"
+    ])
+
     # ============================================
-    # MODE A: Single File (Deep Dive)
+    # TAB 1: Single Genome Deep Dive
     # ============================================
-    if len(results) == 1:
-        data = results[0]
-        st.markdown(f"### Genome Analysis Report: {data['name']}")
-        st.caption(f"File: {data['filename']} | Detected Chromosomes: {data['total_chromosomes']}")
+    with tab_single:
+        selected_organism = st.selectbox("Select Genome Sample", options=[r['name'] for r in results], key="s_org")
+        data = next(r for r in results if r['name'] == selected_organism)
         
-        st.markdown("#### Whole Genome Summary")
-        wg1, wg2, wg3, wg4 = st.columns(4)
-        wg1.metric("Total Genome Size", f"{data['len']:,} bp")
-        wg2.metric("Total GC Content", f"{data['gc_total']:.2f}%")
-        wg3.metric("Coding Ratio (CDS)", f"{data['coding_pct']:.2f}%")
-        wg4.metric("Non-coding DNA", f"{data['nc_pct']:.2f}%")
-        st.divider()
+        st.subheader(f"Genome Analysis: {data['name']}")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Genome Size", f"{data['len']:,} bp")
+        m2.metric("GC Content", f"{data['gc_total']:.2f}%")
+        m3.metric("Coding Ratio (CDS)", f"{data['coding_pct']:.2f}%")
+        m4.metric("Non-coding Ratio", f"{data['nc_pct']:.2f}%")
         
         chrom_ids = list(data['chromosomes'].keys())
-        
-        if 'selected_chrom_id' not in st.session_state or st.session_state.selected_chrom_id not in chrom_ids:
-            st.session_state.selected_chrom_id = chrom_ids[0]
-            
-        if len(chrom_ids) > 1:
-            st.markdown("### Chromosome Map")
-            st.write("**Click on a chromosome bar below** to inspect specific statistical data and analysis.")
-
-            c_names = []
-            c_lengths = []
-            for cid in chrom_ids:
-                desc = data['chromosomes'][cid]['desc']
-                match = re.search(r'chromosome\s+([A-Za-z0-9]+)', desc, re.IGNORECASE)
-                short_name = match.group(1).upper() if match else cid
-                c_names.append(short_name)
-                c_lengths.append(data['chromosomes'][cid]['len'])
-
-            name_to_id = dict(zip(c_names, chrom_ids))
-
-            colors = []
-            line_colors = []
-            for cid in chrom_ids:
-                if cid == st.session_state.selected_chrom_id:
-                    colors.append('rgba(99, 102, 241, 0.7)') 
-                    line_colors.append('#818cf8')
-                else:
-                    colors.append('rgba(255, 255, 255, 0.08)') 
-                    line_colors.append('#9CA3AF')
-
-            fig = go.Figure(data=[
-                go.Bar(
-                    x=c_names,
-                    y=c_lengths,
-                    marker=dict(color=colors, line=dict(color=line_colors, width=2)),
-                    width=0.4,
-                    hoverinfo='x+y',
-                    hovertemplate='Chromosome %{x}<br>Length: %{y:,} bp<extra></extra>'
-                )
-            ])
-
-            fig.update_layout(
-                plot_bgcolor='rgba(0,0,0,0)',
-                paper_bgcolor='rgba(0,0,0,0)',
-                xaxis=dict(showgrid=False, zeroline=False, side='top', tickfont=dict(size=14, color="#E5E7EB"), fixedrange=True),
-                yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, autorange="reversed", fixedrange=True),
-                height=220,
-                margin=dict(l=0, r=0, t=40, b=0),
-                dragmode=False
-            )
-            
-            chart_event = st.plotly_chart(
-                fig, use_container_width=True, config={'displayModeBar': False},
-                on_select="rerun", selection_mode="points"
-            )
-            
-            if chart_event and "selection" in chart_event and "points" in chart_event["selection"]:
-                points = chart_event["selection"]["points"]
-                if len(points) > 0:
-                    clicked_x = points[0]["x"]
-                    clicked_id = name_to_id.get(clicked_x)
-                    if clicked_id and clicked_id != st.session_state.selected_chrom_id:
-                        st.session_state.selected_chrom_id = clicked_id
-                        st.rerun()
-
-            selected_chrom_id = st.session_state.selected_chrom_id
-            st.markdown("<br>", unsafe_allow_html=True)
-        else:
-            selected_chrom_id = chrom_ids[0]
-            
+        selected_chrom_id = st.selectbox("Select Sequence / Chromosome", chrom_ids)
         c_data = data['chromosomes'][selected_chrom_id]
         
-        # 1. Key Metrics 
-        st.markdown(f"#### Chromosome Summary: {selected_chrom_id} ({c_data['desc']})")
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Sequence Length", f"{c_data['len']:,} bp")
-        m2.metric("GC Content", f"{c_data['gc_total']:.2f}%")
-        m3.metric("Coding Region (CDS)", f"{c_data['coding_pct']:.2f}%")
-        m4.metric("Non-coding Region", f"{c_data['nc_pct']:.2f}%")
+        st.markdown("---")
+        st.markdown("### 1. Interactive Genome & Feature Track Browser")
         
-        st.divider()
-
-        # 2. Charts Row 1
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("**1. Intergenic Region Length Distribution**")
-            lengths = [len(i) for i in c_data['intergenic_seqs'] if len(i) > 0]
-            if lengths:
-                fig3, ax = plt.subplots(figsize=(6, 4))
-                ax.hist(lengths, bins=50, color="#818cf8", edgecolor='#1f2937', alpha=0.9)
-                ax.set_xlabel("Length (bp)")
-                ax.set_ylabel("Frequency")
-                ax.grid(axis='y', alpha=0.2, linestyle='--')
-                st.pyplot(fig3)
-            else:
-                st.warning("No intergenic regions found in this dataset.")
-
-        with c2:
-            st.markdown("**2. GC Content Comparison**")
-            gc_coding = [calculate_gc(c_data['seq'][s:e]) for s, e in c_data['cds_regions']]
-            gc_nc = [calculate_gc(s) for s in c_data['intergenic_seqs'] if len(s) > 0]
+        # Interactive Linear Feature Map
+        features = c_data['features']
+        if features:
+            df_feat = pd.DataFrame(features)
+            fig_track = go.Figure()
             
-            if gc_coding and gc_nc:
-                fig2, ax2 = plt.subplots(figsize=(6, 4))
-                bp = ax2.boxplot([gc_coding, gc_nc], patch_artist=True)
-                ax2.set_xticks([1, 2])
-                ax2.set_xticklabels(["Coding Region", "Non-coding Region"])
-                for box in bp['boxes']:
-                    box.set(color='#34d399', linewidth=2)
-                    box.set(facecolor='#065f46')
-                for median in bp['medians']:
-                    median.set(color='white', linewidth=2)
-                ax2.set_ylabel("GC Percentage (%)")
-                ax2.grid(axis='y', alpha=0.2, linestyle='--')
-                st.pyplot(fig2)
-
-        st.divider()
-        
-        # 3. Sliding Window
-        st.markdown("**3. GC Content Variation Across Chromosome (Sliding Window)**")
-        window = 1000
-        seq = c_data['seq']
-        pos = []
-        vals = []
-        for i in range(0, len(seq), window):
-            sub = seq[i:i+window]
-            if len(sub) == window:
-                pos.append(i)
-                vals.append(calculate_gc(sub))
-        
-        if vals:
-            st.area_chart(pd.DataFrame({'GC%': vals}, index=pos), color="#6366f1")
-
-        # 4. Amino Acid Distribution
-        st.divider()
-        st.markdown(f"**4. Amino Acid Composition - Detected {c_data['total_proteins']:,} protein translations**")
-        if c_data.get('aa_dist'):
-            df_aa = pd.DataFrame(list(c_data['aa_dist'].items()), columns=['Amino Acid', 'Count'])
+            # Draw baseline chromosome line
+            fig_track.add_trace(go.Scatter(
+                x=[0, c_data['len']], y=[0, 0], mode='lines',
+                line=dict(color='#6B7280', width=4), hoverinfo='none', name='Chromosome'
+            ))
             
-            aa_full_names = {
-                'A': 'Alanine', 'C': 'Cysteine', 'D': 'Aspartic acid',
-                'E': 'Glutamic acid', 'F': 'Phenylalanine', 'G': 'Glycine',
-                'H': 'Histidine', 'I': 'Isoleucine', 'K': 'Lysine',
-                'L': 'Leucine', 'M': 'Methionine', 'N': 'Asparagine',
-                'P': 'Proline', 'Q': 'Glutamine', 'R': 'Arginine',
-                'S': 'Serine', 'T': 'Threonine', 'V': 'Valine',
-                'W': 'Tryptophan', 'Y': 'Tyrosine'
-            }
-            df_aa['Amino Acid'] = df_aa['Amino Acid'].map(aa_full_names)
-            df_aa = df_aa.sort_values(by="Count", ascending=False) 
+            # Plot top 200 features to prevent lag
+            feat_subset = df_feat.head(200)
+            for idx, row in feat_subset.iterrows():
+                y_pos = 1 if row['strand'] == 1 else -1
+                color = '#10B981' if row['type'] == 'CDS' else '#F59E0B'
+                fig_track.add_trace(go.Scatter(
+                    x=[row['start'], row['end']], y=[y_pos, y_pos],
+                    mode='lines+markers', line=dict(color=color, width=8),
+                    name=row['type'],
+                    hovertemplate=f"Feature: {row['name']}<br>Type: {row['type']}<br>Span: {row['start']:,} - {row['end']:,} bp<extra></extra>"
+                ))
             
-            fig_aa = px.bar(
-                df_aa, x='Amino Acid', y='Count', color='Count',
-                template='plotly_dark', color_continuous_scale="Blugrn",
-                labels={"Count": "Frequency"}
+            fig_track.update_layout(
+                title="Linear Gene Map (Green: CDS | Yellow: RNA/Other Features)",
+                xaxis_title="Position (bp)", yaxis=dict(showticklabels=False, range=[-2, 2]),
+                template="plotly_dark", height=250, showlegend=False,
+                xaxis=dict(rangeslider=dict(visible=True))
             )
-            fig_aa.update_layout(margin=dict(l=0, r=0, t=20, b=0), height=380)
-            st.plotly_chart(fig_aa, use_container_width=True, config={'displayModeBar': False})
+            st.plotly_chart(fig_track, use_container_width=True)
         else:
-            st.info("No translation feature data found in this chromosome.")
+            st.info("No feature annotation data available for linear track visualization.")
 
-        # AI Assistant Section
-        st.divider()
-        st.subheader("AI Biological Analysis Assistant")
-        ai_col1, ai_col2 = st.columns([1, 2])
+        # GC Content & GC Skew Sliding Window
+        st.markdown("### 2. GC Content & GC Skew Sliding Window")
+        win_size = st.slider("Window Size (bp)", min_value=500, max_value=20000, value=2000, step=500)
         
-        with ai_col1:
-            st.markdown("The system processes overall genome statistics and performs targeted analysis on the selected chromosome. You can enter specific questions or hypotheses below.")
-            user_question = st.text_input("Enter question or biological hypothesis:", placeholder="e.g., What is the evolutionary significance of higher Serine frequency?")
-            run_ai = st.button("Analyze with AI")
-            
-        with ai_col2:
-            if run_ai:
-                if not api_key:
-                    st.error("Please enter a Google API Key in the sidebar to proceed.")
-                else:
-                    all_chroms_summary = ""
-                    for cid, cinfo in data['chromosomes'].items():
-                        all_chroms_summary += f"- ID {cid}: Length={cinfo['len']:,} bp, GC={cinfo['gc_total']:.2f}%, Non-coding={cinfo['nc_pct']:.2f}%, Proteins={cinfo['total_proteins']:,}\n"
-                    
-                    prompt = f"""
-                    You are an expert Bioinformatics AI Assistant. Analyze the genomic data of this organism.
-                    
-                    [GLOBAL GENOME CONTEXT]
-                    Organism Classification Name: {data['name']}
-                    Total Chromosomes in this file: {data['total_chromosomes']}
-                    Here is the statistical summary of ALL chromosomes for your baseline comparison:
-                    {all_chroms_summary}
-                    
-                    [TARGET FOCUS]
-                    Selected Chromosome ID: {selected_chrom_id}
-                    Description: {c_data['desc']}
-                    Length: {c_data['len']:,} bp
-                    GC Content: {c_data['gc_total']:.2f}%
-                    Coding Region (CDS) Ratio: {c_data['coding_pct']:.2f}%
-                    Non-coding Region Ratio: {c_data['nc_pct']:.2f}%
-                    Total Protein Products: {c_data['total_proteins']:,}
-                    Amino Acid Distribution on this targeted chromosome: {c_data['aa_dist']}
-                    
-                    [USER QUESTION / INTENT]
-                    Question: {user_question if user_question else "Please provide a comprehensive biological analysis and evolutionary summary of the selected chromosome."}
-                    
-                    CRITICAL INSTRUCTION:
-                    1. Focus your answer primarily on the [TARGET FOCUS] chromosome and directly answer the user's question or analyze it deeply.
-                    2. Use the [GLOBAL GENOME CONTEXT] data only to make meaningful biological comparisons.
-                    3. Do not generalize the answer to the whole genome unless making a comparison. Keep the focus tight.
-                    4. Answer in scientifically rigorous, clear, formal, and academic English language suitable for a research presentation.
-                    """
-                    
-                    response_text = get_ai_response(api_key, prompt)
-                    st.markdown("### AI Analysis Report")
-                    st.info(response_text)
-            else:
-                st.info("Once API Key is set, click the button to generate the report.")
+        seq = c_data['seq']
+        positions, gc_vals, skew_vals = [], [], []
+        for i in range(0, len(seq) - win_size, win_size):
+            sub = seq[i:i+win_size]
+            positions.append(i)
+            gc_vals.append(calculate_gc(sub))
+            skew_vals.append(calculate_gc_skew(sub))
 
-        # 5. Advanced Analysis Section
+        fig_skew = make_subplots(rows=2, cols=1, shared_xaxes=True, subplot_titles=("GC Content (%)", "GC Skew (G-C)/(G+C)"))
+        fig_skew.add_trace(go.Scatter(x=positions, y=gc_vals, line=dict(color='#818CF8')), row=1, col=1)
+        fig_skew.add_trace(go.Scatter(x=positions, y=skew_vals, line=dict(color='#34D399')), row=2, col=1)
+        fig_skew.update_layout(template="plotly_dark", height=400, showlegend=False)
+        st.plotly_chart(fig_skew, use_container_width=True)
+
+        # Circos-style Polar Chart
+        st.markdown("### 3. Whole Sequence Polar View (Circos-style)")
+        polar_df = pd.DataFrame({'Position': positions, 'GC': gc_vals, 'Skew': skew_vals})
+        fig_polar = px.line_polar(polar_df, r="GC", theta="Position", template="plotly_dark", color_discrete_sequence=['#F43F5E'])
+        fig_polar.update_layout(height=450)
+        st.plotly_chart(fig_polar, use_container_width=True)
+
+        # Codon Usage Bias & ORF Finder
         st.markdown("---")
-        st.subheader("Advanced Analysis: Repeated Patterns & Raw Data")
+        col_orf, col_rscu = st.columns(2)
         
-        ac1, ac2 = st.columns(2)
-        with ac1:
-            st.markdown("#### Sequence Motif Search")
-            st.caption("Search for repeating sequence motifs in non-coding DNA")
-            
-            sc1, sc2 = st.columns(2)
-            with sc1: motif_input = st.text_input("Sequence motif (e.g., AT, G)", value="AT")
-            with sc2: threshold_input = st.number_input("Minimum repeat count", min_value=3, value=5)
-            
-            total_repeats = 0
-            for s in c_data['intergenic_seqs']:
-                total_repeats += find_simple_repeats(s, motif_input, threshold_input)
-            
-            st.metric(f"Occurrences of motif '{motif_input}' repeated >= {threshold_input} times", f"{total_repeats:,}")
+        with col_orf:
+            st.markdown("### 4. Open Reading Frame (ORF) Finder")
+            min_len = st.number_input("Min Protein Length (aa)", min_value=30, value=100, step=10)
+            if st.button("Scan ORFs"):
+                orfs_df = find_orfs(c_data['seq'], min_aa_len=min_len)
+                st.write(f"Found {len(orfs_df)} predicted ORFs")
+                st.dataframe(orfs_df.head(10), use_container_width=True)
 
-        with ac2:
-            st.markdown("#### Raw Data Export")
-            st.caption("Export non-coding DNA sequences in FASTA format for downstream processing.")
+        with col_rscu:
+            st.markdown("### 5. Codon Usage Bias (RSCU)")
+            if c_data['cds_seqs']:
+                rscu_df = calculate_rscu(c_data['cds_seqs'])
+                fig_rscu = px.bar(rscu_df, x="Codon", y="RSCU", color="Amino Acid", template="plotly_dark")
+                fig_rscu.update_layout(height=320)
+                st.plotly_chart(fig_rscu, use_container_width=True)
+            else:
+                st.info("Requires CDS features to compute Codon Usage.")
+
+        # NCBI BLAST Quick Action
+        st.markdown("---")
+        st.markdown("### 6. External BLAST Action")
+        blast_seq = c_data['seq'][:500] # First 500 bp
+        blast_url = f"https://blast.ncbi.nlm.nih.gov/Blast.cgi?QUERY={urllib.parse.quote(blast_seq)}&PROGRAM=blastn&DATABASE=nr&CMD=Put"
+        st.markdown(f'<a href="{blast_url}" target="_blank"><button style="padding:10px; background-color:#2563EB; color:white; border-radius:8px; border:none; cursor:pointer;">🚀 Send First 500bp to NCBI BLASTn</button></a>', unsafe_allow_html=True)
+
+    # ============================================
+    # TAB 2: Comparative Genomics & Synteny
+    # ============================================
+    with tab_comp:
+        if len(results) < 2:
+            st.warning("Please upload or import at least 2 genome samples to enable comparative analysis.")
+        else:
+            st.subheader("Inter-Species Comparative Dashboard")
             
-            fasta_str = ""
-            for i, seq_segment in enumerate(c_data['intergenic_seqs']):
-                if len(seq_segment) > 0:
-                    fasta_str += f">Intergenic_{i+1}_{c_data['id']}\n{seq_segment}\n"
-            
-            st.download_button(
-                label="Download Non-coding Sequences (.fasta)",
-                data=fasta_str,
-                file_name=f"{c_data['id']}_junk_dna.fasta",
-                mime="text/plain"
-            )
-            
-        if data['total_chromosomes'] > 1:
+            comp_df = pd.DataFrame([
+                {
+                    "Organism": r['name'],
+                    "Size (bp)": r['len'],
+                    "GC%": r['gc_total'],
+                    "Coding%": r['coding_pct'],
+                    "Chromosomes": r['total_chromosomes']
+                } for r in results
+            ])
+            st.dataframe(comp_df, use_container_width=True)
+
             st.markdown("---")
-            st.markdown("### Intra-organism Chromosome Comparison")
-            st.write("Table and charts comparing statistical metrics across chromosomes within the genome.")
-
-            chrom_list = []
-            for cid, cinfo in data['chromosomes'].items():
-                chrom_list.append({
-                    "Reference ID": cid,
-                    "Length (bp)": cinfo['len'],
-                    "GC Content (%)": cinfo['gc_total'],
-                    "Coding Ratio (%)": cinfo['coding_pct'],
-                    "Non-coding Ratio (%)": cinfo['nc_pct']
-                })
-            df_chroms = pd.DataFrame(chrom_list)
-            st.dataframe(df_chroms.style.highlight_max(axis=0, color='#1e40af'), use_container_width=True)
-
-            cc1, cc2 = st.columns(2)
-            with cc1:
-                st.markdown("**Chromosome Length Comparison**")
-                fig_c1 = px.bar(
-                    df_chroms, x="Reference ID", y="Length (bp)", color="GC Content (%)", 
-                    template="plotly_dark", color_continuous_scale="Viridis"
-                )
-                st.plotly_chart(fig_c1, use_container_width=True)
+            col_synt, col_phylo = st.columns(2)
+            
+            with col_synt:
+                st.markdown("### 1. Synteny Dotplot Matrix")
+                org1 = st.selectbox("Genome A", [r['name'] for r in results], index=0)
+                org2 = st.selectbox("Genome B", [r['name'] for r in results], index=min(1, len(results)-1))
                 
-            with cc2:
-                st.markdown("**Relationship: Chromosome Length vs. Non-coding Ratio**")
-                fig_c2 = px.scatter(
-                    df_chroms, x="Length (bp)", y="Non-coding Ratio (%)", color="GC Content (%)", 
-                    size="Length (bp)", hover_name="Reference ID", template="plotly_dark",
-                    color_continuous_scale="Viridis"
-                )
-                st.plotly_chart(fig_c2, use_container_width=True)
-
-# ============================================
-# MODE B: Multi-File (Comparison)
-# ============================================
-    elif len(results) > 1:
-        st.markdown(f"### Inter-species Comparative Analysis ({len(results)} samples)")
-        
-        df = pd.DataFrame([
-            {
-                "Organism": r['name'].split(',')[0],
-                "Genome Size (bp)": r['len'],
-                "Coding Ratio (%)": r['coding_pct'],
-                "Non-coding Ratio (%)": r['nc_pct'],
-                "GC Content (%)": r['gc_total']
-            } for r in results
-        ])
-
-        # 1. Summary Table
-        st.markdown("#### Cross-species Summary Table")
-        st.dataframe(df.style.highlight_max(axis=0, color='#1e40af'), use_container_width=True)
-
-        # AI Evolutionary Comparative Insight
-        st.markdown("---")
-        st.subheader("AI Evolutionary Comparative Insight")
-        run_comp_ai = st.button("Generate Comparative Analysis Report")
-        if run_comp_ai:
-            if not api_key:
-                st.error("Please enter a Google API Key in the left sidebar first.")
-            else:
-                data_str = df.to_string()
-                prompt = f"""
-                You are a Bioinformatics expert. Analyze this comparative data table of multiple organisms:
-                {data_str}
+                seq1 = list(next(r for r in results if r['name'] == org1)['chromosomes'].values())[0]['seq'][:5000]
+                seq2 = list(next(r for r in results if r['name'] == org2)['chromosomes'].values())[0]['seq'][:5000]
                 
-                Please provide a rigorous comparative analysis addressing:
-                1. Which organism demonstrates higher genetic complexity or evolutionary advancement based on genome size and coding vs non-coding ratios?
-                2. Identify if there's any correlation between GC content variants and environmental adaptations or lifestyle among these species.
-                3. Comment on the distribution patterns of Non-coding DNA (Junk DNA).
-                Answer clearly in highly formal, academic English language suitable for a research paper.
-                """
-                response_text = get_ai_response(api_key, prompt)
-                st.markdown("### Cross-species Comparative Report")
-                st.info(response_text)
+                if st.button("Generate Dotplot"):
+                    k = 10
+                    matches_x, matches_y = [], []
+                    kmers1 = {seq1[i:i+k]: i for i in range(len(seq1)-k)}
+                    for j in range(len(seq2)-k):
+                        kmer = seq2[j:j+k]
+                        if kmer in kmers1:
+                            matches_x.append(kmers1[kmer])
+                            matches_y.append(j)
+                    
+                    fig_dot = go.Figure(data=go.Scatter(x=matches_x, y=matches_y, mode='markers', marker=dict(size=3, color='#818CF8')))
+                    fig_dot.update_layout(title="Dotplot Synteny Match", xaxis_title=org1, yaxis_title=org2, template="plotly_dark", height=400)
+                    st.plotly_chart(fig_dot, use_container_width=True)
 
-        # 2. Interactive Charts
-        st.markdown("---")
-        st.markdown("#### Structural Relationship: Genome Size vs. Non-coding DNA Percentage")
-        st.caption("Hover over points for organism details. Pan and zoom to inspect features.")
+            with col_phylo:
+                st.markdown("### 2. K-mer Distance Clustering (Dendrogram)")
+                if len(results) >= 2:
+                    kmer_profiles = []
+                    names = [r['name'] for r in results]
+                    for r in results:
+                        first_seq = list(r['chromosomes'].values())[0]['seq']
+                        kmer_profiles.append(generate_kmer_profile(first_seq, k=3))
+                    
+                    df_kmers = pd.DataFrame(kmer_profiles).fillna(0)
+                    dist_matrix = np.corrcoef(df_kmers)
+                    
+                    fig_phy, ax_phy = plt.subplots(figsize=(6, 4))
+                    linked = linkage(dist_matrix, 'single')
+                    dendrogram(linked, labels=names, orientation='top', ax=ax_phy)
+                    ax_phy.set_title("Genetic Proximity Dendrogram")
+                    st.pyplot(fig_phy)
+
+    # ============================================
+    # TAB 3: Interactive AI Assistant
+    # ============================================
+    with tab_ai:
+        st.subheader("🤖 AI Genomics Assistant")
+        st.caption("Ask continuous questions or execute quick preset biological prompts.")
         
-        fig_scatter = px.scatter(
-            df, x="Genome Size (bp)", y="Non-coding Ratio (%)", color="GC Content (%)", size="Genome Size (bp)",
-            hover_name="Organism", color_continuous_scale="Viridis", template="plotly_dark",
-            title="Genome Size vs. Non-coding DNA Percentage"
-        )
-        st.plotly_chart(fig_scatter, use_container_width=True)
+        # Preset Prompt Buttons
+        p_col1, p_col2, p_col3 = st.columns(3)
+        preset_prompt = None
+        if p_col1.button("🧬 Analyze Horizontal Gene Transfer"):
+            preset_prompt = "Examine the GC Skew and GC Content variations to identify potential horizontal gene transfer regions."
+        if p_col2.button("🌡️ Assess Thermal/Environmental Adaptation"):
+            preset_prompt = "Evaluate GC Content and Amino Acid usage bias to infer thermal or environmental adaptations."
+        if p_col3.button("⚔️ Comparative Evolutionary Summary"):
+            preset_prompt = "Summarize the key evolutionary trade-offs between coding density and non-coding regions across loaded genomes."
 
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("**Non-coding DNA Percentage (%)**")
-            fig_bar, ax_bar = plt.subplots()
-            df_sorted = df.sort_values("Non-coding Ratio (%)", ascending=True)
-            ax_bar.barh(df_sorted["Organism"], df_sorted["Non-coding Ratio (%)"], color="#ac3632")
-            ax_bar.set_xlabel("Non-coding DNA (%)")
-            ax_bar.grid(axis='x', linestyle='--', alpha=0.3)
-            st.pyplot(fig_bar)
+        # Display Chat History
+        for msg in st.session_state['chat_history']:
+            role_class = "chat-bubble-user" if msg['role'] == 'user' else "chat-bubble-ai"
+            st.markdown(f'<div class="{role_class}"><b>{msg["role"].capitalize()}:</b> {msg["content"]}</div>', unsafe_allow_html=True)
 
-        with c2:
-            st.markdown("**Total Genome Size (bp)**")
-            fig_bar2, ax_bar2 = plt.subplots()
-            df_sorted_len = df.sort_values("Genome Size (bp)", ascending=True)
-            ax_bar2.barh(df_sorted_len["Organism"], df_sorted_len["Genome Size (bp)"], color="#60a5fa") 
-            ax_bar2.set_xlabel("Total Size (Base pairs)")
-            ax_bar2.grid(axis='x', linestyle='--', alpha=0.3)
-            st.pyplot(fig_bar2)
+        user_input = st.chat_input("Ask any question about your genomic dataset...")
+        prompt_to_run = user_input or preset_prompt
+
+        if prompt_to_run:
+            st.session_state['chat_history'].append({"role": "user", "content": prompt_to_run})
+            
+            # Context Preparation
+            context = f"Loaded Samples Count: {len(results)}\n"
+            for r in results:
+                context += f"- Organism: {r['name']}, Size: {r['len']}bp, GC: {r['gc_total']:.2f}%, Coding: {r['coding_pct']:.2f}%\n"
+
+            full_prompt = f"Context Data:\n{context}\nUser Question: {prompt_to_run}\nProvide a rigorous scientific response."
+            
+            with st.spinner("AI is thinking..."):
+                response = get_ai_response(api_key, full_prompt)
+                st.session_state['chat_history'].append({"role": "assistant", "content": response})
+                st.rerun()
+
+    # ============================================
+    # TAB 4: Data Export & Reports
+    # ============================================
+    with tab_export:
+        st.subheader("📥 Export Results & Reports")
+        
+        ex_col1, ex_col2 = st.columns(2)
+        with ex_col1:
+            st.markdown("### Export HTML Summary Report")
+            summary_json = json.dumps([{"name": r["name"], "len": r["len"], "gc": r["gc_total"]} for r in results], indent=2)
+            html_report = f"""
+            <html>
+                <head><title>Genome Analysis Report</title></head>
+                <body style="font-family:sans-serif; padding:20px; background-color:#111; color:#fff;">
+                    <h1>Genome Analysis Summary Report</h1>
+                    <pre>{summary_json}</pre>
+                </body>
+            </html>
+            """
+            st.download_button("Download Interactive HTML Report", data=html_report, file_name="genome_report.html", mime="text/html")
+
+        with ex_col2:
+            st.markdown("### Batch Export Non-coding Sequences")
+            all_nc_fasta = ""
+            for r in results:
+                for cid, cinfo in r['chromosomes'].items():
+                    for idx, nc_seq in enumerate(cinfo['intergenic_seqs']):
+                        if len(nc_seq) > 50:
+                            all_nc_fasta += f">{r['name']}_{cid}_intergenic_{idx+1}\n{nc_seq}\n"
+            st.download_button("Download All Intergenic FASTA (.fasta)", data=all_nc_fasta, file_name="all_intergenic.fasta", mime="text/plain")
