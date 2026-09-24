@@ -300,7 +300,6 @@ def parse_file_content(file_content, filename):
         aa_list = list("ACDEFGHIKLMNPQRSTVWY")
         aa_dist = {aa: all_proteins.count(aa) for aa in aa_list} if all_proteins else {}
 
-        # If genome has multiple chromosomes, format key with Roman numerals (I, II, III, ... n)
         if num_records > 1:
             roman_idx = int_to_roman(idx)
             chrom_key = f"Chromosome {roman_idx} ({record.id})"
@@ -406,7 +405,6 @@ with st.sidebar:
     st.subheader("2. Upload Files")
     uploaded_files = st.file_uploader("Upload .gbff, .gb, .fasta, .fa files", type=["gbff", "gb", "gbk", "fasta", "fa"], accept_multiple_files=True)
     
-    # Process uploaded files and NCBI cache into session state
     if uploaded_files:
         for uf in uploaded_files:
             source_id = f"file_{uf.name}_{uf.size}"
@@ -430,7 +428,6 @@ with st.sidebar:
                 elif err:
                     st.error(err)
 
-    # Editable list of uploaded/imported organisms
     if st.session_state['parsed_results']:
         st.markdown("---")
         st.subheader("✏️ Edit Uploaded Organisms")
@@ -469,7 +466,6 @@ if not results:
     c2.metric("GC Skew & Codon RSCU", "Active")
     c3.metric("AI Multi-turn Chatbot", "Ready")
 else:
-    # Workspace Navigation Tabs
     tab_single, tab_comp, tab_ai, tab_export = st.tabs([
         "🔬 Single Genome Analysis", 
         "📊 Comparative Genomics & Synteny", 
@@ -492,12 +488,9 @@ else:
         m4.metric("Non-coding Ratio", f"{data['nc_pct']:.2f}%")
         
         chrom_ids = list(data['chromosomes'].keys())
-        
-        # เพิ่มตัวเลือก "All Chromosomes (Combined)" เมื่อสิ่งมีชีวิตนั้นมีหลายโครโมโซม
         chrom_options = ["All Chromosomes (Combined)"] + chrom_ids if len(chrom_ids) > 1 else chrom_ids
         selected_chrom_id = st.selectbox("Select Sequence / Chromosome", chrom_options)
         
-        # จัดเตรียมข้อมูลสำหรับวิเคราะห์แบบรวมทุกโครโมโซม หรือเลือกโครโมโซมเดียว
         if selected_chrom_id == "All Chromosomes (Combined)":
             combined_seq = "".join([c['seq'] for c in data['chromosomes'].values()])
             combined_cds_seqs = [cds for c in data['chromosomes'].values() for cds in c['cds_seqs']]
@@ -529,19 +522,16 @@ else:
         st.markdown("---")
         st.markdown("### 1. Interactive Genome & Feature Track Browser")
         
-        # Interactive Linear Feature Map
         features = c_data['features']
         if features:
             df_feat = pd.DataFrame(features)
             fig_track = go.Figure()
             
-            # Draw baseline chromosome line
             fig_track.add_trace(go.Scatter(
                 x=[0, c_data['len']], y=[0, 0], mode='lines',
                 line=dict(color='#6B7280', width=4), hoverinfo='none', name='Genome'
             ))
             
-            # Plot top 200 features to prevent lag
             feat_subset = df_feat.head(200)
             for idx, row in feat_subset.iterrows():
                 y_pos = 1 if row['strand'] == 1 else -1
@@ -564,7 +554,6 @@ else:
         else:
             st.info("No feature annotation data available for linear track visualization.")
 
-        # GC Content & GC Skew Sliding Window
         st.markdown("### 2. GC Content & GC Skew Sliding Window")
         win_size = st.slider("Window Size (bp)", min_value=500, max_value=50000, value=2000, step=500)
         
@@ -582,14 +571,12 @@ else:
         fig_skew.update_layout(template="plotly_dark", height=400, showlegend=False)
         st.plotly_chart(fig_skew, use_container_width=True)
 
-        # Circos-style Polar Chart
         st.markdown("### 3. Whole Sequence Polar View (Circos-style)")
         polar_df = pd.DataFrame({'Position': positions, 'GC': gc_vals, 'Skew': skew_vals})
         fig_polar = px.line_polar(polar_df, r="GC", theta="Position", template="plotly_dark", color_discrete_sequence=['#F43F5E'])
         fig_polar.update_layout(height=450)
         st.plotly_chart(fig_polar, use_container_width=True)
 
-        # Codon Usage Bias & ORF Finder
         st.markdown("---")
         col_orf, col_rscu = st.columns(2)
         
@@ -621,12 +608,12 @@ else:
             else:
                 st.info("Requires CDS features to compute Codon Usage.")
 
-        # NCBI BLAST Quick Action
         st.markdown("---")
         st.markdown("### 6. External BLAST Action")
-        blast_seq = c_data['seq'][:500] # First 500 bp
+        blast_seq = c_data['seq'][:500]
         blast_url = f"https://blast.ncbi.nlm.nih.gov/Blast.cgi?QUERY={urllib.parse.quote(blast_seq)}&PROGRAM=blastn&DATABASE=nr&CMD=Put"
         st.markdown(f'<a href="{blast_url}" target="_blank"><button style="padding:10px; background-color:#2563EB; color:white; border-radius:8px; border:none; cursor:pointer;">🚀 Send First 500bp to NCBI BLASTn</button></a>', unsafe_allow_html=True)
+
     # ============================================
     # TAB 2: Comparative Genomics & Synteny
     # ============================================
@@ -697,7 +684,6 @@ else:
         st.subheader("🤖 AI Genomics Assistant")
         st.caption("Ask continuous questions or execute quick preset biological prompts.")
         
-        # Preset Prompt Buttons
         p_col1, p_col2, p_col3 = st.columns(3)
         preset_prompt = None
         if p_col1.button("Analyze Horizontal Gene Transfer"):
@@ -707,7 +693,6 @@ else:
         if p_col3.button("Comparative Evolutionary Summary"):
             preset_prompt = "Summarize the key evolutionary trade-offs between coding density and non-coding regions across loaded genomes."
 
-        # Display Chat History
         for msg in st.session_state['chat_history']:
             role_class = "chat-bubble-user" if msg['role'] == 'user' else "chat-bubble-ai"
             st.markdown(f'<div class="{role_class}"><b>{msg["role"].capitalize()}:</b> {msg["content"]}</div>', unsafe_allow_html=True)
@@ -718,7 +703,6 @@ else:
         if prompt_to_run:
             st.session_state['chat_history'].append({"role": "user", "content": prompt_to_run})
             
-            # Context Preparation
             context = f"Loaded Samples Count: {len(results)}\n"
             for r in results:
                 context += f"- Organism: {r['name']}, Size: {r['len']}bp, GC: {r['gc_total']:.2f}%, Coding: {r['coding_pct']:.2f}%\n"
@@ -726,37 +710,48 @@ else:
             full_prompt = f"Context Data:\n{context}\nUser Question: {prompt_to_run}\nProvide a rigorous scientific response."
             
             with st.spinner("AI is thinking..."):
-                response = get_ai_response(api_key, full_prompt)
-                st.session_state['chat_history'].append({"role": "assistant", "content": response})
+                ai_response = get_ai_response(api_key, full_prompt)
+                st.session_state['chat_history'].append({"role": "assistant", "content": ai_response})
                 st.rerun()
 
     # ============================================
-    # TAB 4: Data Export & Reports
+    # TAB 4: Data & Report Export
     # ============================================
     with tab_export:
-        st.subheader("📥 Export Results & Reports")
+        st.subheader("📥 Data & Report Export")
+        st.caption("Download summary statistics and analytical outputs in CSV or JSON formats.")
         
-        ex_col1, ex_col2 = st.columns(2)
-        with ex_col1:
-            st.markdown("### Export HTML Summary Report")
-            summary_json = json.dumps([{"name": r["name"], "len": r["len"], "gc": r["gc_total"]} for r in results], indent=2)
-            html_report = f"""
-            <html>
-                <head><title>Genome Analysis Report</title></head>
-                <body style="font-family:sans-serif; padding:20px; background-color:#111; color:#fff;">
-                    <h1>Genome Analysis Summary Report</h1>
-                    <pre>{summary_json}</pre>
-                </body>
-            </html>
-            """
-            st.download_button("Download Interactive HTML Report", data=html_report, file_name="genome_report.html", mime="text/html")
-
-        with ex_col2:
-            st.markdown("### Batch Export Non-coding Sequences")
-            all_nc_fasta = ""
-            for r in results:
-                for cid, cinfo in r['chromosomes'].items():
-                    for idx, nc_seq in enumerate(cinfo['intergenic_seqs']):
-                        if len(nc_seq) > 50:
-                            all_nc_fasta += f">{r['name']}_{cid}_intergenic_{idx+1}\n{nc_seq}\n"
-            st.download_button("Download All Intergenic FASTA (.fasta)", data=all_nc_fasta, file_name="all_intergenic.fasta", mime="text/plain")
+        export_list = []
+        for r in results:
+            export_list.append({
+                "Organism Name": r['name'],
+                "Filename": r['filename'],
+                "Total Chromosomes": r['total_chromosomes'],
+                "Genome Length (bp)": r['len'],
+                "GC Content (%)": round(r['gc_total'], 2),
+                "Coding Ratio (%)": round(r['coding_pct'], 2),
+                "Non-coding Ratio (%)": round(r['nc_pct'], 2)
+            })
+        
+        df_export = pd.DataFrame(export_list)
+        st.markdown("### Summary Report Table")
+        st.dataframe(df_export, use_container_width=True)
+        
+        col_dl1, col_dl2 = st.columns(2)
+        with col_dl1:
+            csv_data = df_export.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📄 Download Summary Table (CSV)",
+                data=csv_data,
+                file_name="genome_summary_report.csv",
+                mime="text/csv"
+            )
+        
+        with col_dl2:
+            json_data = json.dumps(export_list, indent=4)
+            st.download_button(
+                label="📦 Download Summary JSON",
+                data=json_data,
+                file_name="genome_summary_report.json",
+                mime="application/json"
+            )
