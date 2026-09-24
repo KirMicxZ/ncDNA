@@ -591,14 +591,14 @@ else:
                 r="GC", 
                 theta="Angle", 
                 template="plotly_dark", 
-                color_discrete_sequence=['#F43F5E'],
-                start_angle=0,
-                direction="clockwise"
+                color_discrete_sequence=['#F43F5E']
             )
             fig_polar.update_layout(
                 height=450,
                 polar=dict(
                     angularaxis=dict(
+                        direction="clockwise",  
+                        rotation=90,            
                         tickmode='array',
                         tickvals=[0, 90, 180, 270],
                         ticktext=['0%', '25%', '50%', '75%']
