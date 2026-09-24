@@ -614,6 +614,49 @@ else:
         else:
             st.info("💡 Insufficient data to render Polar View. Try reducing the Window Size slider above.")
 
+        st.markdown("### 4. Open Reading Frames (ORFs) Finder")
+        min_orf_len = st.number_input("Minimum Protein Length (aa)", min_value=30, max_value=1000, value=100, step=10)
+        
+        if st.button("Predict ORFs"):
+            with st.spinner("Finding Open Reading Frames..."):
+                orf_df = find_orfs(c_data['seq'], min_aa_len=min_orf_len)
+                if not orf_df.empty:
+                    st.success(f"Found {len(orf_df)} potential ORFs")
+                    st.dataframe(orf_df, use_container_width=True)
+                    
+                    fig_orf = px.histogram(
+                        orf_df, 
+                        x="Protein Length (aa)", 
+                        color="Strand",
+                        title="ORF Length Distribution",
+                        template="plotly_dark",
+                        color_discrete_map={"+": "#10B981", "-": "#F59E0B"}
+                    )
+                    st.plotly_chart(fig_orf, use_container_width=True)
+                else:
+                    st.warning("No ORFs found matching the specified minimum length.")
+
+        st.markdown("### 5. Codon Usage Bias & RSCU Analysis")
+        if c_data['cds_seqs']:
+            rscu_df = calculate_rscu(c_data['cds_seqs'])
+            if not rscu_df.empty:
+                fig_rscu = px.bar(
+                    rscu_df, 
+                    x="Codon", 
+                    y="RSCU", 
+                    color="Amino Acid",
+                    title="Relative Synonymous Codon Usage (RSCU)",
+                    template="plotly_dark"
+                )
+                st.plotly_chart(fig_rscu, use_container_width=True)
+                
+                with st.expander("View RSCU Detailed Data Table"):
+                    st.dataframe(rscu_df, use_container_width=True)
+            else:
+                st.info("No valid CDS sequences found to calculate RSCU.")
+        else:
+            st.info("No CDS annotation available for RSCU analysis. Upload GenBank (.gbff) file to enable this feature.")
+
         st.markdown("---")
         st.markdown("### 6. External BLAST Action")
         blast_seq = c_data['seq'][:500]
