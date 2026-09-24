@@ -559,54 +559,55 @@ else:
         
         seq = c_data['seq']
         positions, gc_vals, skew_vals = [], [], []
-        for i in range(0, len(seq) - win_size, win_size):
+        
+        # ปรับ range ให้ครอบคลุมอย่างน้อย 1 window
+        step = max(1, win_size)
+        for i in range(0, len(seq) - win_size + 1, step):
             sub = seq[i:i+win_size]
             positions.append(i)
             gc_vals.append(calculate_gc(sub))
             skew_vals.append(calculate_gc_skew(sub))
 
-        fig_skew = make_subplots(rows=2, cols=1, shared_xaxes=True, subplot_titles=("GC Content (%)", "GC Skew (G-C)/(G+C)"))
-        fig_skew.add_trace(go.Scatter(x=positions, y=gc_vals, line=dict(color='#818CF8')), row=1, col=1)
-        fig_skew.add_trace(go.Scatter(x=positions, y=skew_vals, line=dict(color='#34D399')), row=2, col=1)
-        fig_skew.update_layout(template="plotly_dark", height=400, showlegend=False)
-        st.plotly_chart(fig_skew, use_container_width=True)
+        if positions:
+            fig_skew = make_subplots(rows=2, cols=1, shared_xaxes=True, subplot_titles=("GC Content (%)", "GC Skew (G-C)/(G+C)"))
+            fig_skew.add_trace(go.Scatter(x=positions, y=gc_vals, line=dict(color='#818CF8')), row=1, col=1)
+            fig_skew.add_trace(go.Scatter(x=positions, y=skew_vals, line=dict(color='#34D399')), row=2, col=1)
+            fig_skew.update_layout(template="plotly_dark", height=400, showlegend=False)
+            st.plotly_chart(fig_skew, use_container_width=True)
+        else:
+            st.warning("Sequence length is shorter than the selected window size. Please decrease the window size.")
 
         st.markdown("### 3. Whole Sequence Polar View (Circos-style)")
         polar_df = pd.DataFrame({'Position': positions, 'GC': gc_vals, 'Skew': skew_vals})
-        fig_polar = px.line_polar(polar_df, r="GC", theta="Position", template="plotly_dark", color_discrete_sequence=['#F43F5E'])
-        fig_polar.update_layout(height=450)
-        st.plotly_chart(fig_polar, use_container_width=True)
-
-        st.markdown("---")
-        col_orf, col_rscu = st.columns(2)
         
-        with col_orf:
-            st.markdown("### 4. Open Reading Frame (ORF) Finder")
-            min_len = st.number_input("Min Protein Length (aa)", min_value=30, value=100, step=10)
-            if st.button("Scan ORFs"):
-                if c_data['is_combined']:
-                    all_orfs = []
-                    for cid, cinfo in data['chromosomes'].items():
-                        df_o = find_orfs(cinfo['seq'], min_aa_len=min_len)
-                        if not df_o.empty:
-                            df_o.insert(0, 'Chromosome', cid)
-                            all_orfs.append(df_o)
-                    orfs_df = pd.concat(all_orfs, ignore_index=True) if all_orfs else pd.DataFrame()
-                else:
-                    orfs_df = find_orfs(c_data['seq'], min_aa_len=min_len)
-                
-                st.write(f"Found {len(orfs_df)} predicted ORFs across selected sequence(s)")
-                st.dataframe(orfs_df.head(15), use_container_width=True)
-
-        with col_rscu:
-            st.markdown("### 5. Codon Usage Bias (RSCU)")
-            if c_data['cds_seqs']:
-                rscu_df = calculate_rscu(c_data['cds_seqs'])
-                fig_rscu = px.bar(rscu_df, x="Codon", y="RSCU", color="Amino Acid", template="plotly_dark")
-                fig_rscu.update_layout(height=320)
-                st.plotly_chart(fig_rscu, use_container_width=True)
-            else:
-                st.info("Requires CDS features to compute Codon Usage.")
+        # เช็คว่ามีข้อมูลก่อนวาด Polar Plot
+        if not polar_df.empty and c_data['len'] > 0:
+            polar_df_plot = polar_df.copy()
+            # แปลงตำแหน่ง Base Pair ให้เป็นมุม 0 - 360 องศา
+            polar_df_plot['Angle'] = (polar_df_plot['Position'] / c_data['len']) * 360
+            
+            fig_polar = px.line_polar(
+                polar_df_plot, 
+                r="GC", 
+                theta="Angle", 
+                template="plotly_dark", 
+                color_discrete_sequence=['#F43F5E'],
+                start_angle=0,
+                direction="clockwise"
+            )
+            fig_polar.update_layout(
+                height=450,
+                polar=dict(
+                    angularaxis=dict(
+                        tickmode='array',
+                        tickvals=[0, 90, 180, 270],
+                        ticktext=['0%', '25%', '50%', '75%']
+                    )
+                )
+            )
+            st.plotly_chart(fig_polar, use_container_width=True)
+        else:
+            st.info("💡 Insufficient data to render Polar View. Try reducing the Window Size slider above.")
 
         st.markdown("---")
         st.markdown("### 6. External BLAST Action")
