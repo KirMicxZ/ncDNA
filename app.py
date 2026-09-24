@@ -324,7 +324,7 @@ def get_ai_response(api_key, prompt):
 # 3. Sidebar: Input & File Controls
 # ============================================
 with st.sidebar:
-    st.title("🧬 Genome Pro")
+    st.title("Genome Analyzer")
     st.caption("Advanced Bioinformatics & AI Suite")
     st.markdown("---")
     
@@ -606,11 +606,11 @@ else:
         # Preset Prompt Buttons
         p_col1, p_col2, p_col3 = st.columns(3)
         preset_prompt = None
-        if p_col1.button("🧬 Analyze Horizontal Gene Transfer"):
+        if p_col1.button("Analyze Horizontal Gene Transfer"):
             preset_prompt = "Examine the GC Skew and GC Content variations to identify potential horizontal gene transfer regions."
-        if p_col2.button("🌡️ Assess Thermal/Environmental Adaptation"):
+        if p_col2.button("Assess Thermal/Environmental Adaptation"):
             preset_prompt = "Evaluate GC Content and Amino Acid usage bias to infer thermal or environmental adaptations."
-        if p_col3.button("⚔️ Comparative Evolutionary Summary"):
+        if p_col3.button("Comparative Evolutionary Summary"):
             preset_prompt = "Summarize the key evolutionary trade-offs between coding density and non-coding regions across loaded genomes."
 
         # Display Chat History
