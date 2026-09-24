@@ -45,6 +45,25 @@ if 'ncbi_search_results' not in st.session_state:
     st.session_state['ncbi_search_results'] = None
 if 'chat_history' not in st.session_state:
     st.session_state['chat_history'] = []
+if 'parsed_results' not in st.session_state:
+    st.session_state['parsed_results'] = []
+if 'processed_sources' not in st.session_state:
+    st.session_state['processed_sources'] = set()
+
+# ============================================
+# Helper: Convert Integer to Roman Numerals
+# ============================================
+def int_to_roman(num):
+    val = [1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1]
+    syb = ["M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I"]
+    roman_num = ''
+    i = 0
+    while num > 0:
+        for _ in range(num // val[i]):
+            roman_num += syb[i]
+            num -= val[i]
+        i += 1
+    return roman_num
 
 # ============================================
 # 2. Advanced Bioinformatic Logic & Calculations
@@ -227,7 +246,9 @@ def parse_file_content(file_content, filename):
     total_coding_len = 0
     total_gc = 0
     
-    for record in records:
+    num_records = len(records)
+    
+    for idx, record in enumerate(records, start=1):
         try:
             seq = str(record.seq).upper()
         except UndefinedSequenceError:
@@ -279,7 +300,14 @@ def parse_file_content(file_content, filename):
         aa_list = list("ACDEFGHIKLMNPQRSTVWY")
         aa_dist = {aa: all_proteins.count(aa) for aa in aa_list} if all_proteins else {}
 
-        chromosomes_data[record.id] = {
+        # If genome has multiple chromosomes, format key with Roman numerals (I, II, III, ... n)
+        if num_records > 1:
+            roman_idx = int_to_roman(idx)
+            chrom_key = f"Chromosome {roman_idx} ({record.id})"
+        else:
+            chrom_key = record.id
+
+        chromosomes_data[chrom_key] = {
             "id": record.id,
             "desc": record.description,
             "len": slen,
@@ -378,6 +406,51 @@ with st.sidebar:
     st.subheader("2. Upload Files")
     uploaded_files = st.file_uploader("Upload .gbff, .gb, .fasta, .fa files", type=["gbff", "gb", "gbk", "fasta", "fa"], accept_multiple_files=True)
     
+    # Process uploaded files and NCBI cache into session state
+    if uploaded_files:
+        for uf in uploaded_files:
+            source_id = f"file_{uf.name}_{uf.size}"
+            if source_id not in st.session_state['processed_sources']:
+                content = uf.getvalue().decode("utf-8", errors="ignore")
+                data, err = parse_file_content(content, uf.name)
+                if data:
+                    st.session_state['parsed_results'].append(data)
+                    st.session_state['processed_sources'].add(source_id)
+                elif err:
+                    st.error(err)
+
+    if st.session_state['ncbi_cache']:
+        for item in st.session_state['ncbi_cache']:
+            source_id = f"ncbi_{item['id']}"
+            if source_id not in st.session_state['processed_sources']:
+                data, err = parse_file_content(item['content'], item['filename'])
+                if data:
+                    st.session_state['parsed_results'].append(data)
+                    st.session_state['processed_sources'].add(source_id)
+                elif err:
+                    st.error(err)
+
+    # Editable list of uploaded/imported organisms
+    if st.session_state['parsed_results']:
+        st.markdown("---")
+        st.subheader("✏️ Edit Uploaded Organisms")
+        to_delete = []
+        for idx, org in enumerate(st.session_state['parsed_results']):
+            col_name, col_del = st.columns([4, 1])
+            with col_name:
+                new_name = st.text_input(f"Organism #{idx+1}", value=org['name'], key=f"org_name_{idx}")
+                st.session_state['parsed_results'][idx]['name'] = new_name
+            with col_del:
+                st.write("")
+                st.write("")
+                if st.button("🗑️", key=f"del_org_{idx}"):
+                    to_delete.append(idx)
+        
+        if to_delete:
+            for d_idx in sorted(to_delete, reverse=True):
+                st.session_state['parsed_results'].pop(d_idx)
+            st.rerun()
+
     st.markdown("---")
     st.subheader("3. AI Key Configuration")
     api_key = st.text_input("Google AI Studio Key", type="password")
@@ -387,35 +460,15 @@ with st.sidebar:
 # ============================================
 st.markdown('<h1 class="main-header">Genome Analysis & AI Workspace</h1>', unsafe_allow_html=True)
 
-has_files = bool(uploaded_files)
-has_ncbi = bool(st.session_state['ncbi_cache'])
+results = st.session_state['parsed_results']
 
-if not has_files and not has_ncbi:
+if not results:
     st.info("👈 Please upload genome data files or search NCBI in the sidebar to start analysis.")
     c1, c2, c3 = st.columns(3)
     c1.metric("Linear Feature Tracks", "Active")
     c2.metric("GC Skew & Codon RSCU", "Active")
     c3.metric("AI Multi-turn Chatbot", "Ready")
 else:
-    results = []
-    errors = []
-    
-    with st.spinner('Parsing biological sequences...'):
-        if has_files:
-            for uf in uploaded_files:
-                content = uf.getvalue().decode("utf-8", errors="ignore")
-                data, err = parse_file_content(content, uf.name)
-                if data: results.append(data)
-                else: errors.append(err)
-        if has_ncbi:
-            for item in st.session_state['ncbi_cache']:
-                data, err = parse_file_content(item['content'], item['filename'])
-                if data: results.append(data)
-                else: errors.append(err)
-
-    if errors:
-        for e in errors: st.error(e)
-
     # Workspace Navigation Tabs
     tab_single, tab_comp, tab_ai, tab_export = st.tabs([
         "🔬 Single Genome Analysis", 
